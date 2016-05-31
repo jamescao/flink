@@ -1,5 +1,9 @@
 ---
 title: "How to use logging"
+# Top navigation
+top-nav-group: internals
+top-nav-pos: 2
+top-nav-title: Logging
 ---
 <!--
 Licensed to the Apache Software Foundation (ASF) under one
@@ -28,6 +32,12 @@ The logging in Flink is implemented using the slf4j logging interface. As underl
 ## Configuring Log4j
 
 Log4j is controlled using property files. In Flink's case, the file is usually called `log4j.properties`. We pass the filename and location of this file using the `-Dlog4j.configuration=` parameter to the JVM.
+
+Flink ships with the following default properties files:
+
+- `log4j-cli.properties`: Used by the Flink command line client (e.g. `flink run`) (not code executed on the cluster)
+- `log4j-yarn-session.properties`: Used by the Flink command line client when starting a YARN session (`yarn-session.sh`)
+- `log4j.properties`: JobManager/Taskmanager logs (both standalone and YARN)
 
 ## Configuring logback
 

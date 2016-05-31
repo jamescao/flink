@@ -18,10 +18,12 @@
 
 package org.apache.flink.api.java;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.Plan;
 import org.apache.flink.api.common.operators.CollectionExecutor;
 
+@PublicEvolving
 public class CollectionEnvironment extends ExecutionEnvironment {
 
 	@Override
@@ -34,15 +36,6 @@ public class CollectionEnvironment extends ExecutionEnvironment {
 		return this.lastJobExecutionResult;
 	}
 
-	/**
-	 * @deprecated Please use {@link #getParallelism}
-	 */
-	@Override
-	@Deprecated
-	public int getDegreeOfParallelism() {
-		return getParallelism();
-	}
-
 	@Override
 	public int getParallelism() {
 		return 1; // always serial
@@ -51,5 +44,9 @@ public class CollectionEnvironment extends ExecutionEnvironment {
 	@Override
 	public String getExecutionPlan() throws Exception {
 		throw new UnsupportedOperationException("Execution plans are not used for collection-based execution.");
+	}
+
+	@Override
+	public void startNewSession() throws Exception {
 	}
 }

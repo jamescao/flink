@@ -16,12 +16,12 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.api.common.typeutils;
 
 import java.io.IOException;
 import java.io.Serializable;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 
@@ -35,6 +35,7 @@ import org.apache.flink.core.memory.DataOutputView;
  * 
  * @param <T> The data type that the serializer serializes.
  */
+@PublicEvolving
 public abstract class TypeSerializer<T> implements Serializable {
 	
 	private static final long serialVersionUID = 1L;
@@ -147,4 +148,16 @@ public abstract class TypeSerializer<T> implements Serializable {
 	 * @throws IOException Thrown if any of the two views raises an exception.
 	 */
 	public abstract void copy(DataInputView source, DataOutputView target) throws IOException;
+
+	public abstract boolean equals(Object obj);
+
+	/**
+	 * Returns true if the given object can be equaled with this object. If not, it returns false.
+	 *
+	 * @param obj Object which wants to take part in the equality relation
+	 * @return true if obj can be equaled with this, otherwise false
+	 */
+	public abstract boolean canEqual(Object obj);
+
+	public abstract int hashCode();
 }

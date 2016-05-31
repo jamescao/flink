@@ -19,8 +19,10 @@
 package org.apache.flink.runtime.taskmanager;
 
 import com.google.common.collect.Maps;
+
+import org.apache.flink.api.common.ExecutionConfigTest;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
+import org.apache.flink.metrics.groups.TaskMetricGroup;
 import org.apache.flink.runtime.blob.BlobKey;
 import org.apache.flink.runtime.broadcast.BroadcastVariableManager;
 import org.apache.flink.runtime.deployment.InputGateDeploymentDescriptor;
@@ -42,15 +44,17 @@ import org.apache.flink.runtime.io.network.partition.consumer.SingleInputGate;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
-import org.apache.flink.runtime.memorymanager.MemoryManager;
+import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.messages.TaskMessages;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
 import scala.concurrent.duration.FiniteDuration;
 
 import java.lang.reflect.Field;
+import java.net.URL;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -286,27 +290,6 @@ public class TaskTest {
 	}
 	
 	@Test
-	public void testExecutionFailsInRegisterInputOutput() {
-		try {
-			Task task = createTask(InvokableWithExceptionInRegisterInOut.class);
-			task.registerExecutionListener(listenerGateway);
-
-			task.run();
-
-			assertEquals(ExecutionState.FAILED, task.getExecutionState());
-			assertTrue(task.isCanceledOrFailed());
-			assertTrue(task.getFailureCause().getMessage().contains("registerInputOutput"));
-
-			validateUnregisterTask(task.getExecutionId());
-			validateListenerMessage(ExecutionState.FAILED, task, true);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
-	
-	@Test
 	public void testExecutionFailsInInvoke() {
 		try {
 			Task task = createTask(InvokableWithExceptionInInvoke.class);
@@ -330,68 +313,6 @@ public class TaskTest {
 		}
 	}
 	
-	@Test
-	public void testCancelDuringRegisterInputOutput() {
-		try {
-			Task task = createTask(InvokableBlockingInRegisterInOut.class);
-			task.registerExecutionListener(listenerGateway);
-
-			// run the task asynchronous
-			task.startTaskThread();
-			
-			// wait till the task is in regInOut
-			awaitLatch.await();
-			
-			task.cancelExecution();
-			assertEquals(ExecutionState.CANCELING, task.getExecutionState());
-			triggerLatch.trigger();
-			
-			task.getExecutingThread().join();
-
-			assertEquals(ExecutionState.CANCELED, task.getExecutionState());
-			assertTrue(task.isCanceledOrFailed());
-			assertNull(task.getFailureCause());
-			
-			validateUnregisterTask(task.getExecutionId());
-			validateCancelingAndCanceledListenerMessage(task);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
-
-	@Test
-	public void testFailDuringRegisterInputOutput() {
-		try {
-			Task task = createTask(InvokableBlockingInRegisterInOut.class);
-			task.registerExecutionListener(listenerGateway);
-
-			// run the task asynchronous
-			task.startTaskThread();
-
-			// wait till the task is in regInOut
-			awaitLatch.await();
-
-			task.failExternally(new Exception("test"));
-			assertEquals(ExecutionState.FAILED, task.getExecutionState());
-			triggerLatch.trigger();
-
-			task.getExecutingThread().join();
-
-			assertEquals(ExecutionState.FAILED, task.getExecutionState());
-			assertTrue(task.isCanceledOrFailed());
-			assertTrue(task.getFailureCause().getMessage().contains("test"));
-
-			validateUnregisterTask(task.getExecutionId());
-			validateListenerMessage(ExecutionState.FAILED, task, true);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
-
 	@Test
 	public void testCancelDuringInvoke() {
 		try {
@@ -451,30 +372,6 @@ public class TaskTest {
 			validateUnregisterTask(task.getExecutionId());
 
 			validateListenerMessage(ExecutionState.RUNNING, task, false);
-			validateListenerMessage(ExecutionState.FAILED, task, true);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
-
-	@Test
-	public void testCanceledAfterExecutionFailedInRegInOut() {
-		try {
-			Task task = createTask(InvokableWithExceptionInRegisterInOut.class);
-			task.registerExecutionListener(listenerGateway);
-
-			task.run();
-			
-			// this should not overwrite the failure state
-			task.cancelExecution();
-
-			assertEquals(ExecutionState.FAILED, task.getExecutionState());
-			assertTrue(task.isCanceledOrFailed());
-			assertTrue(task.getFailureCause().getMessage().contains("registerInputOutput"));
-
-			validateUnregisterTask(task.getExecutionId());
 			validateListenerMessage(ExecutionState.FAILED, task, true);
 		}
 		catch (Exception e) {
@@ -725,18 +622,22 @@ public class TaskTest {
 				jobManagerGateway,
 				new FiniteDuration(60, TimeUnit.SECONDS),
 				libCache,
-				mock(FileCache.class));
+				mock(FileCache.class),
+				new TaskManagerRuntimeInfo("localhost", new Configuration(), System.getProperty("java.io.tmpdir")),
+				mock(TaskMetricGroup.class));
 	}
 
 	private TaskDeploymentDescriptor createTaskDeploymentDescriptor(Class<? extends AbstractInvokable> invokable) {
 		return new TaskDeploymentDescriptor(
-				new JobID(), new JobVertexID(), new ExecutionAttemptID(),
-				"Test Task", 0, 1,
+				new JobID(), "Test Job", new JobVertexID(), new ExecutionAttemptID(),
+				ExecutionConfigTest.getSerializedConfig(),
+				"Test Task", 0, 1, 0,
 				new Configuration(), new Configuration(),
 				invokable.getName(),
 				Collections.<ResultPartitionDeploymentDescriptor>emptyList(),
 				Collections.<InputGateDeploymentDescriptor>emptyList(),
 				Collections.<BlobKey>emptyList(),
+				Collections.<URL>emptyList(),
 				0);
 	}
 
@@ -748,7 +649,7 @@ public class TaskTest {
 		try {
 			// we may have to wait for a bit to give the actors time to receive the message
 			// and put it into the queue
-			Object rawMessage = taskManagerMessages.poll(10, TimeUnit.SECONDS);
+			Object rawMessage = taskManagerMessages.take();
 			
 			assertNotNull("There is no additional TaskManager message", rawMessage);
 			if (!(rawMessage instanceof TaskMessages.TaskInFinalState)) {
@@ -767,7 +668,7 @@ public class TaskTest {
 		try {
 			// we may have to wait for a bit to give the actors time to receive the message
 			// and put it into the queue
-			Object rawMessage = taskManagerMessages.poll(10, TimeUnit.SECONDS);
+			Object rawMessage = taskManagerMessages.take();
 
 			assertNotNull("There is no additional TaskManager message", rawMessage);
 			if (!(rawMessage instanceof TaskMessages.UpdateTaskExecutionState)) {
@@ -798,8 +699,8 @@ public class TaskTest {
 		try {
 			// we may have to wait for a bit to give the actors time to receive the message
 			// and put it into the queue
-			TaskMessages.UpdateTaskExecutionState message = 
-					(TaskMessages.UpdateTaskExecutionState) listenerMessages.poll(10, TimeUnit.SECONDS);
+			TaskMessages.UpdateTaskExecutionState message =
+					(TaskMessages.UpdateTaskExecutionState) listenerMessages.take();
 			assertNotNull("There is no additional listener message", message);
 			
 			TaskExecutionState taskState =  message.taskExecutionState();
@@ -824,9 +725,9 @@ public class TaskTest {
 			// we may have to wait for a bit to give the actors time to receive the message
 			// and put it into the queue
 			TaskMessages.UpdateTaskExecutionState message1 =
-					(TaskMessages.UpdateTaskExecutionState) listenerMessages.poll(10, TimeUnit.SECONDS);
+					(TaskMessages.UpdateTaskExecutionState) listenerMessages.take();
 			TaskMessages.UpdateTaskExecutionState message2 =
-					(TaskMessages.UpdateTaskExecutionState) listenerMessages.poll(10, TimeUnit.SECONDS);
+					(TaskMessages.UpdateTaskExecutionState) listenerMessages.take();
 			
 			
 			assertNotNull("There is no additional listener message", message1);
@@ -866,9 +767,6 @@ public class TaskTest {
 	public static final class TestInvokableCorrect extends AbstractInvokable {
 
 		@Override
-		public void registerInputOutput() {}
-
-		@Override
 		public void invoke() {}
 
 		@Override
@@ -877,22 +775,8 @@ public class TaskTest {
 		}
 	}
 
-	public static final class InvokableWithExceptionInRegisterInOut extends AbstractInvokable {
-
-		@Override
-		public void registerInputOutput() {
-			throw new RuntimeException("test");
-		}
-
-		@Override
-		public void invoke() {}
-	}
-	
 	public static final class InvokableWithExceptionInInvoke extends AbstractInvokable {
 		
-		@Override
-		public void registerInputOutput() {}
-
 		@Override
 		public void invoke() throws Exception {
 			throw new Exception("test");
@@ -900,9 +784,6 @@ public class TaskTest {
 	}
 
 	public static final class InvokableWithExceptionOnTrigger extends AbstractInvokable {
-
-		@Override
-		public void registerInputOutput() {}
 
 		@Override
 		public void invoke() {
@@ -926,28 +807,7 @@ public class TaskTest {
 
 	public static abstract class InvokableNonInstantiable extends AbstractInvokable {}
 
-	public static final class InvokableBlockingInRegisterInOut extends AbstractInvokable {
-
-		@Override
-		public void registerInputOutput() {
-			awaitLatch.trigger();
-			
-			try {
-				triggerLatch.await();
-			}
-			catch (InterruptedException e) {
-				throw new RuntimeException();
-			}
-		}
-
-		@Override
-		public void invoke() {}
-	}
-
 	public static final class InvokableBlockingInInvoke extends AbstractInvokable {
-
-		@Override
-		public void registerInputOutput() {}
 
 		@Override
 		public void invoke() throws Exception {
@@ -963,19 +823,15 @@ public class TaskTest {
 	public static final class InvokableWithCancelTaskExceptionInInvoke extends AbstractInvokable {
 
 		@Override
-		public void registerInputOutput() {
-		}
-
-		@Override
 		public void invoke() throws Exception {
 			awaitLatch.trigger();
 
 			try {
 				triggerLatch.await();
 			}
-			finally {
-				throw new CancelTaskException();
-			}
+			catch (Throwable ignored) {}
+			
+			throw new CancelTaskException();
 		}
 	}
 }

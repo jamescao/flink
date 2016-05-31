@@ -18,12 +18,15 @@
 
 package org.apache.flink.api.common;
 
-import static org.junit.Assert.*;
+import org.apache.flink.util.SerializedValue;
+import org.junit.Test;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
-import org.junit.Test;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class ExecutionConfigTest {
 
@@ -44,5 +47,58 @@ public class ExecutionConfigTest {
 		}
 
 		assertTrue(counter == expectedTypes.size());
+	}
+
+	@Test
+	public void testConfigurationOfParallelism() {
+		ExecutionConfig config = new ExecutionConfig();
+
+		// verify that PARALLELISM_UNKNOWN does not change initial parallelism
+		int parallelism = config.getParallelism();
+		config.setParallelism(ExecutionConfig.PARALLELISM_UNKNOWN);
+
+		assertEquals(parallelism, config.getParallelism());
+
+		// verify explicit change in parallelism
+		parallelism = 36;
+		config.setParallelism(parallelism);
+
+		assertEquals(parallelism, config.getParallelism());
+
+		// verify that PARALLELISM_UNKNOWN does not change configured parallelism
+		config.setParallelism(ExecutionConfig.PARALLELISM_UNKNOWN);
+
+		assertEquals(parallelism, config.getParallelism());
+
+		// verify that parallelism is reset to default flag value
+		parallelism = ExecutionConfig.PARALLELISM_DEFAULT;
+		config.setParallelism(parallelism);
+
+		assertEquals(parallelism, config.getParallelism());
+	}
+
+	/**
+	 * Helper function to create a new ExecutionConfig for tests.
+	 * @return A serialized ExecutionConfig
+	 */
+	public static SerializedValue<ExecutionConfig> getSerializedConfig() {
+		try {
+			return new SerializedValue<>(new ExecutionConfig());
+		} catch (IOException e) {
+			throw new RuntimeException("Couldn't create new ExecutionConfig for test.", e);
+		}
+	}
+
+	/**
+	 * Deserializes the given ExecutionConfig with the System class loader.
+	 * @param serializedConfig The serialized ExecutionConfig
+	 * @return ExecutionConfig
+	 */
+	public static ExecutionConfig deserializeConfig(SerializedValue<ExecutionConfig> serializedConfig) {
+		try {
+			return serializedConfig.deserializeValue(ExecutionConfigTest.class.getClassLoader());
+		} catch (Exception e) {
+			throw new RuntimeException("Could not deserialize ExecutionConfig for test.", e);
+		}
 	}
 }

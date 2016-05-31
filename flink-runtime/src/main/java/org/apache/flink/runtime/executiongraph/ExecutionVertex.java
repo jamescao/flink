@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.executiongraph;
 
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.blob.BlobKey;
 import org.apache.flink.runtime.deployment.InputChannelDeploymentDescriptor;
@@ -43,12 +44,13 @@ import org.apache.flink.runtime.jobmanager.scheduler.NoResourceAvailableExceptio
 import org.apache.flink.runtime.jobmanager.scheduler.Scheduler;
 
 import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.runtime.util.SerializedValue;
+import org.apache.flink.util.SerializedValue;
 import org.slf4j.Logger;
 
 import scala.concurrent.duration.FiniteDuration;
 
 import java.io.Serializable;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -71,7 +73,6 @@ public class ExecutionVertex implements Serializable {
 
 	private static final long serialVersionUID = 42L;
 
-	@SuppressWarnings("unused")
 	private static final Logger LOG = ExecutionGraph.LOG;
 
 	private static final int MAX_DISTINCT_LOCATIONS_TO_CONSIDER = 8;
@@ -178,10 +179,6 @@ public class ExecutionVertex implements Serializable {
 				getTotalNumberOfParallelSubtasks());
 	}
 
-	public int getSubTaskIndex() {
-		return subTaskIndex;
-	}
-
 	public int getTotalNumberOfParallelSubtasks() {
 		return this.jobVertex.getParallelism();
 	}
@@ -227,6 +224,15 @@ public class ExecutionVertex implements Serializable {
 
 	public InstanceConnectionInfo getCurrentAssignedResourceLocation() {
 		return currentExecution.getAssignedResourceLocation();
+	}
+	
+	public Execution getPriorExecutionAttempt(int attemptNumber) {
+		if (attemptNumber >= 0 && attemptNumber < priorExecutions.size()) {
+			return priorExecutions.get(attemptNumber);
+		}
+		else {
+			throw new IllegalArgumentException("attempt does not exist");
+		}
 	}
 	
 	public ExecutionGraph getExecutionGraph() {
@@ -456,11 +462,25 @@ public class ExecutionVertex implements Serializable {
 		this.currentExecution.cancel();
 	}
 
+	public void stop() {
+		this.currentExecution.stop();
+	}
+
 	public void fail(Throwable t) {
 		this.currentExecution.fail(t);
 	}
 
-	public void sendMessageToCurrentExecution(Serializable message, ExecutionAttemptID attemptID) {
+	public boolean sendMessageToCurrentExecution(
+			Serializable message,
+			ExecutionAttemptID attemptID) {
+
+		return sendMessageToCurrentExecution(message, attemptID, null);
+	}
+
+	public boolean sendMessageToCurrentExecution(
+			Serializable message,
+			ExecutionAttemptID attemptID,
+			ActorGateway sender) {
 		Execution exec = getCurrentExecutionAttempt();
 		
 		// check that this is for the correct execution attempt
@@ -471,16 +491,26 @@ public class ExecutionVertex implements Serializable {
 			if (slot != null) {
 				ActorGateway gateway = slot.getInstance().getActorGateway();
 				if (gateway != null) {
-					gateway.tell(message);
+					if (sender == null) {
+						gateway.tell(message);
+					} else {
+						gateway.tell(message, sender);
+					}
+
+					return true;
+				} else {
+					return false;
 				}
 			}
 			else {
 				LOG.debug("Skipping message to undeployed task execution {}/{}", getSimpleName(), attemptID);
+				return false;
 			}
 		}
 		else {
 			LOG.debug("Skipping message to {}/{} because it does not match the current execution",
 					getSimpleName(), attemptID);
+			return false;
 		}
 	}
 	
@@ -606,7 +636,10 @@ public class ExecutionVertex implements Serializable {
 	TaskDeploymentDescriptor createDeploymentDescriptor(
 			ExecutionAttemptID executionId,
 			SimpleSlot targetSlot,
-			SerializedValue<StateHandle<?>> operatorState) {
+			SerializedValue<StateHandle<?>> operatorState,
+			Map<Integer, SerializedValue<StateHandle<?>>> operatorKvState,
+			long recoveryTimestamp,
+			int attemptNumber) {
 
 		// Produced intermediate results
 		List<ResultPartitionDeploymentDescriptor> producedPartitions = new ArrayList<ResultPartitionDeploymentDescriptor>(resultPartitions.size());
@@ -634,12 +667,30 @@ public class ExecutionVertex implements Serializable {
 			consumedPartitions.add(new InputGateDeploymentDescriptor(resultId, queueToRequest, partitions));
 		}
 
+		SerializedValue<ExecutionConfig> serializedConfig = getExecutionGraph().getSerializedExecutionConfig();
 		List<BlobKey> jarFiles = getExecutionGraph().getRequiredJarFiles();
+		List<URL> classpaths = getExecutionGraph().getRequiredClasspaths();
 
-		return new TaskDeploymentDescriptor(getJobId(), getJobvertexId(), executionId, getTaskName(),
-				subTaskIndex, getTotalNumberOfParallelSubtasks(), getExecutionGraph().getJobConfiguration(),
-				jobVertex.getJobVertex().getConfiguration(), jobVertex.getJobVertex().getInvokableClassName(),
-				producedPartitions, consumedPartitions, jarFiles, targetSlot.getRoot().getSlotNumber(), operatorState);
+		return new TaskDeploymentDescriptor(
+			getJobId(),
+			getExecutionGraph().getJobName(),
+			getJobvertexId(),
+			executionId,
+			serializedConfig,
+			getTaskName(),
+			subTaskIndex,
+			getTotalNumberOfParallelSubtasks(),
+			attemptNumber,
+			getExecutionGraph().getJobConfiguration(),
+			jobVertex.getJobVertex().getConfiguration(),
+			jobVertex.getJobVertex().getInvokableClassName(),
+			producedPartitions,
+			consumedPartitions,
+			jarFiles,
+			classpaths,
+			targetSlot.getRoot().getSlotNumber(),
+			operatorState,
+			recoveryTimestamp);
 	}
 
 	// --------------------------------------------------------------------------------------------

@@ -20,6 +20,8 @@ limitations under the License.
 <nav class="navbar navbar-default navbar-fixed-top navbar-main">
   <div id="fold-button" ng-click="showSidebar()" class="btn btn-default navbar-btn pull-left"><i class="fa fa-navicon"></i></div>
   <div class="navbar-title">Overview</div>
+  <div class="navbar-info last first">Version: {{overview['flink-version']}}</div>
+  <div ng-if="overview['flink-commit']" class="navbar-info last first">Commit: {{overview['flink-commit']}}</div>
 </nav>
 <div id="content-inner">
   <div class="row">
@@ -29,7 +31,7 @@ limitations under the License.
           <div class="row">
             <div class="col-xs-3"><i class="fa fa-tasks fa-3x"></i></div>
             <div class="col-xs-9 text-right">
-              <div class="huge">3</div>
+              <div class="huge">{{overview.taskmanagers}}</div>
               <div>Task Managers</div>
             </div>
           </div>
@@ -38,7 +40,7 @@ limitations under the License.
           <div class="row">
             <div class="col-xs-3"><i class="fa fa-folder fa-3x"></i></div>
             <div class="col-xs-9 text-right">
-              <div class="huge">5</div>
+              <div class="huge">{{overview["slots-total"]}}</div>
               <div>Task Slots</div>
             </div>
           </div>
@@ -47,7 +49,7 @@ limitations under the License.
           <div class="row">
             <div class="col-xs-3"><i class="fa fa-folder-o fa-3x"></i></div>
             <div class="col-xs-9 text-right">
-              <div class="huge">2</div>
+              <div class="huge">{{overview["slots-available"]}}</div>
               <div>Available Task Slots</div>
             </div>
           </div>
@@ -59,16 +61,16 @@ limitations under the License.
         <div class="panel-heading">Total Jobs</div>
         <div class="list-group">
           <div class="list-group-item">
-            <div class="badge badge-primary">3</div>Running
+            <div class="badge badge-primary">{{overview["jobs-running"]}}</div>Running
           </div>
           <div class="list-group-item">
-            <div class="badge badge-success">6</div>Finished
+            <div class="badge badge-success">{{overview["jobs-finished"]}}</div>Finished
           </div>
           <div class="list-group-item">
-            <div class="badge badge-info">0</div>Canceled
+            <div class="badge badge-info">{{overview["jobs-cancelled"]}}</div>Canceled
           </div>
           <div class="list-group-item">
-            <div class="badge badge-danger">2</div>Failed
+            <div class="badge badge-danger">{{overview["jobs-failed"]}}</div>Failed
           </div>
         </div>
       </div>
@@ -92,14 +94,14 @@ limitations under the License.
           </tr>
         </thead>
         <tbody>
-          <tr ng-repeat="job in runningJobs" ui-sref="single-job.plan({ jobid: job.jid })">
-            <td>{{job['start-time']}}</td>
-            <td>{{job['end-time']}}</td>
-            <td>{{job.duration}}</td>
-            <td>{{job.jobname}}</td>
+          <tr ng-repeat="job in runningJobs|orderBy:&quot;'start-time'&quot;" ui-sref="single-job.plan.subtasks({ jobid: job.jid })">
+            <td>{{job['start-time'] | amDateFormat:'YYYY-MM-DD, H:mm:ss'}}</td>
+            <td>{{job['end-time'] | amDateFormat:'YYYY-MM-DD, H:mm:ss'}}</td>
+            <td title="{{job.duration | humanizeDuration:false}}">{{job.duration | humanizeDuration:true}}</td>
+            <td>{{job.name}}</td>
             <td>{{job.jid}}</td>
             <td class="label-group">
-              <bs-label status="{{status}}" ng-repeat="(status, value) in job.operators">{{value}}</bs-label>
+              <bs-label status="{{status}}" ng-repeat="(status, value) in job.tasks">{{value}}</bs-label>
             </td>
             <td> 
               <bs-label status="{{job.state}}">{{job.state}}</bs-label>
@@ -127,14 +129,14 @@ limitations under the License.
           </tr>
         </thead>
         <tbody>
-          <tr ng-repeat="job in finishedJobs" ui-sref="single-job.plan({ jobid: job.jid })">
-            <td>{{job['start-time']}}</td>
-            <td>{{job['end-time']}}</td>
-            <td>{{job.duration}}</td>
-            <td>{{job.jobname}}</td>
+          <tr ng-repeat="job in finishedJobs|orderBy:&quot;'end-time'&quot;:true" ui-sref="single-job.plan.subtasks({ jobid: job.jid })">
+            <td>{{job['start-time'] | amDateFormat:'YYYY-MM-DD, H:mm:ss'}}</td>
+            <td>{{job['end-time'] | amDateFormat:'YYYY-MM-DD, H:mm:ss'}}</td>
+            <td title="{{job.duration | humanizeDuration:false}}">{{job.duration | humanizeDuration:true}}</td>
+            <td>{{job.name}}</td>
             <td>{{job.jid}}</td>
             <td class="label-group">
-              <bs-label status="{{status}}" ng-repeat="(status, value) in job.operators">{{value}}</bs-label>
+              <bs-label status="{{status}}" ng-repeat="(status, value) in job.tasks">{{value}}</bs-label>
             </td>
             <td> 
               <bs-label status="{{job.state}}">{{job.state}}</bs-label>

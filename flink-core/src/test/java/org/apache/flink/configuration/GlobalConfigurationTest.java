@@ -27,13 +27,14 @@ import java.io.PrintWriter;
 import java.lang.reflect.Field;
 
 import org.apache.flink.core.testutils.CommonTestUtils;
+import org.apache.flink.util.TestLogger;
 import org.junit.Before;
 import org.junit.Test;
 
 /**
  * This class contains tests for the global configuration (parsing configuration directory information).
  */
-public class GlobalConfigurationTest {
+public class GlobalConfigurationTest extends TestLogger {
 
 	@Before
 	public void resetSingleton() throws SecurityException, NoSuchFieldException, IllegalArgumentException,
@@ -220,5 +221,4 @@ public class GlobalConfigurationTest {
 	private File createRandomFile(File path, String suffix) {
 		return new File(path.getAbsolutePath() + File.separator + CommonTestUtils.getRandomDirectoryName() + suffix);
 	}
-
 }

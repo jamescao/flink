@@ -18,6 +18,9 @@
 
 package org.apache.flink.runtime.messages
 
+import java.util.UUID
+
+import akka.actor.ActorRef
 import org.apache.flink.runtime.accumulators.AccumulatorSnapshot
 import org.apache.flink.runtime.instance.InstanceID
 
@@ -41,6 +44,7 @@ object TaskManagerMessages {
 
     /**
      * Accessor for the case object instance, to simplify Java interoperability.
+     *
      * @return The SendHeartbeat case object instance.
      */
     def get() : SendHeartbeat.type = SendHeartbeat
@@ -71,6 +75,7 @@ object TaskManagerMessages {
 
     /**
      * Accessor for the case object instance, to simplify Java interoperability.
+     *
      * @return The SendStackTrace case object instance.
      */
     def get() : SendStackTrace.type = SendStackTrace
@@ -92,16 +97,38 @@ object TaskManagerMessages {
 
   /**
    * Requests a notification from the task manager as soon as the task manager has been
-   * registered at the job manager. Once the task manager is registered at the job manager a
+   * registered at a job manager. Once the task manager is registered at a job manager a
    * [[RegisteredAtJobManager]] message will be sent to the sender.
    */
   case object NotifyWhenRegisteredAtJobManager
 
   /**
-   * Acknowledges that the task manager has been successfully registered at the job manager. This
+   * Acknowledges that the task manager has been successfully registered at any job manager. This
    * message is a response to [[NotifyWhenRegisteredAtJobManager]].
    */
   case object RegisteredAtJobManager
+
+  /** Tells the address of the new leading [[org.apache.flink.runtime.jobmanager.JobManager]]
+    * and the new leader session ID.
+    *
+    * @param jobManagerAddress Address of the new leading JobManager
+    * @param leaderSessionID New leader session ID
+    */
+  case class JobManagerLeaderAddress(jobManagerAddress: String, leaderSessionID: UUID)
+
+  /** Trait do differentiate which log file is requested */
+  sealed trait LogTypeRequest
+
+  /** Indicates a request for the .log file */
+  case object LogFileRequest extends LogTypeRequest
+
+  /** Indicates a request for the .out file */
+  case object StdOutFileRequest extends LogTypeRequest
+
+  /** Requests the TaskManager to upload either his log/stdout file to the Blob store 
+    * param requestType LogTypeRequest indicating which file is requested
+    */
+  case class RequestTaskManagerLog(requestType : LogTypeRequest)
 
 
   // --------------------------------------------------------------------------
@@ -110,16 +137,33 @@ object TaskManagerMessages {
 
   /**
    * Accessor for the case object instance, to simplify Java interoperability.
+   *
    * @return The NotifyWhenRegisteredAtJobManager case object instance.
    */
   def getNotifyWhenRegisteredAtJobManagerMessage:
-            NotifyWhenRegisteredAtJobManager.type = NotifyWhenRegisteredAtJobManager
+  NotifyWhenRegisteredAtJobManager.type = NotifyWhenRegisteredAtJobManager
 
   /**
    * Accessor for the case object instance, to simplify Java interoperability.
+   *
    * @return The RegisteredAtJobManager case object instance.
    */
   def getRegisteredAtJobManagerMessage:
             RegisteredAtJobManager.type = RegisteredAtJobManager
 
+  /**
+    * Accessor for the case object instance, to simplify Java interoperability.
+    * @return The RequestTaskManagerLog case object instance.
+    */
+  def getRequestTaskManagerLog(): AnyRef = {
+    RequestTaskManagerLog(LogFileRequest)
+  }
+
+  /**
+    * Accessor for the case object instance, to simplify Java interoperability.
+    * @return The RequestTaskManagerStdout case object instance.
+    */
+  def getRequestTaskManagerStdout(): AnyRef = {
+    RequestTaskManagerLog(StdOutFileRequest)
+  }
 }

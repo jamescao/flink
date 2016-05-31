@@ -21,7 +21,7 @@ package org.apache.flink.runtime.accumulators;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.util.SerializedValue;
+import org.apache.flink.util.SerializedValue;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -71,7 +71,7 @@ public class AccumulatorSnapshot implements Serializable {
 	 * @return the serialized map
 	 */
 	public Map<AccumulatorRegistry.Metric, Accumulator<?, ?>> deserializeFlinkAccumulators() throws IOException, ClassNotFoundException {
-		return flinkAccumulators.deserializeValue(ClassLoader.getSystemClassLoader());
+		return flinkAccumulators.deserializeValue(getClass().getClassLoader());
 	}
 
 	/**

@@ -18,16 +18,20 @@
 
 package org.apache.flink.runtime.executiongraph
 
-import org.apache.flink.api.common.JobID
+import org.apache.flink.api.common.{ExecutionConfig, ExecutionConfigTest, JobID}
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.runtime.akka.AkkaUtils
 import org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.SimpleActorGateway
-import org.apache.flink.runtime.jobgraph.{JobStatus, JobGraph, JobVertex}
+import org.apache.flink.runtime.executiongraph.restart.NoRestartStrategy
+import org.apache.flink.runtime.jobgraph.{JobGraph, JobStatus, JobVertex}
 import org.apache.flink.runtime.jobmanager.Tasks
 import org.apache.flink.runtime.jobmanager.scheduler.Scheduler
 import org.apache.flink.runtime.testingUtils.TestingUtils
+import org.junit.runner.RunWith
+import org.scalatest.junit.JUnitRunner
 import org.scalatest.{Matchers, WordSpecLike}
 
+@RunWith(classOf[JUnitRunner])
 class TaskManagerLossFailsTasksTest extends WordSpecLike with Matchers {
 
   "A task manager loss" must {
@@ -53,8 +57,10 @@ class TaskManagerLossFailsTasksTest extends WordSpecLike with Matchers {
           new JobID(),
           "test job",
           new Configuration(),
-          AkkaUtils.getDefaultTimeout)
-        eg.setNumberOfRetriesLeft(0)
+          ExecutionConfigTest.getSerializedConfig,
+          AkkaUtils.getDefaultTimeout,
+          new NoRestartStrategy())
+
         eg.attachJobGraph(jobGraph.getVerticesSortedTopologicallyFromSources)
 
         eg.getState should equal(JobStatus.CREATED)
@@ -64,7 +70,7 @@ class TaskManagerLossFailsTasksTest extends WordSpecLike with Matchers {
 
         instance1.markDead()
         eg.getState should equal(JobStatus.FAILING)
-      }catch{
+      } catch {
         case t:Throwable =>
           t.printStackTrace()
           fail(t.getMessage)

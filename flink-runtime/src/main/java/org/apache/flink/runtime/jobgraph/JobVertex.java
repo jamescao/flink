@@ -21,10 +21,12 @@ package org.apache.flink.runtime.jobgraph;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplitSource;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.jobgraph.tasks.StoppableTask;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroup;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 
@@ -38,8 +40,8 @@ public class JobVertex implements java.io.Serializable {
 	private static final long serialVersionUID = 1L;
 
 	private static final String DEFAULT_NAME = "(unnamed vertex)";
-	
-	
+
+
 	// --------------------------------------------------------------------------------------------
 	// Members that define the structure / topology of the graph
 	// --------------------------------------------------------------------------------------------
@@ -54,7 +56,7 @@ public class JobVertex implements java.io.Serializable {
 	private final ArrayList<JobEdge> inputs = new ArrayList<JobEdge>();
 
 	/** Number of subtasks to split this task into at runtime.*/
-	private int parallelism = -1;
+	private int parallelism = ExecutionConfig.PARALLELISM_DEFAULT;
 
 	/** Custom configuration passed to the assigned task at runtime. */
 	private Configuration configuration;
@@ -62,18 +64,35 @@ public class JobVertex implements java.io.Serializable {
 	/** The class of the invokable. */
 	private String invokableClassName;
 
+	/** Indicates of this job vertex is stoppable or not. */
+	private boolean isStoppable = false;
+
 	/** Optionally, a source of input splits */
 	private InputSplitSource<?> inputSplitSource;
-	
-	/** The name of the vertex */
+
+	/** The name of the vertex. This will be shown in runtime logs and will be in the runtime environment */
 	private String name;
-	
+
 	/** Optionally, a sharing group that allows subtasks from different job vertices to run concurrently in one slot */
 	private SlotSharingGroup slotSharingGroup;
-	
+
 	/** The group inside which the vertex subtasks share slots */
 	private CoLocationGroup coLocationGroup;
-	
+
+	/** Optional, the name of the operator, such as 'Flat Map' or 'Join', to be included in the JSON plan */
+	private String operatorName;
+
+	/** Optional, the description of the operator, like 'Hash Join', or 'Sorted Group Reduce',
+	 * to be included in the JSON plan */
+	private String operatorDescription;
+
+	/** Optional, pretty name of the operator, to be displayed in the JSON plan */
+	private String operatorPrettyName;
+
+	/** Optional, the JSON for the optimizer properties of the operator result,
+	 * to be included in the JSON plan */
+	private String resultOptimizerProperties;
+
 	// --------------------------------------------------------------------------------------------
 
 	/**
@@ -84,7 +103,7 @@ public class JobVertex implements java.io.Serializable {
 	public JobVertex(String name) {
 		this(name, null);
 	}
-	
+
 	/**
 	 * Constructs a new job vertex and assigns it with the given name.
 	 * 
@@ -95,9 +114,9 @@ public class JobVertex implements java.io.Serializable {
 		this.name = name == null ? DEFAULT_NAME : name;
 		this.id = id == null ? new JobVertexID() : id;
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
 	/**
 	 * Returns the ID of this job vertex.
 	 * 
@@ -106,7 +125,7 @@ public class JobVertex implements java.io.Serializable {
 	public JobVertexID getID() {
 		return this.id;
 	}
-	
+
 	/**
 	 * Returns the name of the vertex.
 	 * 
@@ -115,7 +134,7 @@ public class JobVertex implements java.io.Serializable {
 	public String getName() {
 		return this.name;
 	}
-	
+
 	/**
 	 * Sets the name of the vertex
 	 * 
@@ -154,12 +173,13 @@ public class JobVertex implements java.io.Serializable {
 		}
 		return this.configuration;
 	}
-	
+
 	public void setInvokableClass(Class<? extends AbstractInvokable> invokable) {
 		Preconditions.checkNotNull(invokable);
 		this.invokableClassName = invokable.getName();
+		this.isStoppable = StoppableTask.class.isAssignableFrom(invokable);
 	}
-	
+
 	/**
 	 * Returns the name of the invokable class which represents the task of this vertex.
 	 * 
@@ -168,7 +188,7 @@ public class JobVertex implements java.io.Serializable {
 	public String getInvokableClassName() {
 		return this.invokableClassName;
 	}
-	
+
 	/**
 	 * Returns the invokable class which represents the task of this vertex
 	 * 
@@ -182,7 +202,7 @@ public class JobVertex implements java.io.Serializable {
 		if (invokableClassName == null) {
 			return null;
 		}
-		
+
 		try {
 			return Class.forName(invokableClassName, true, cl).asSubclass(AbstractInvokable.class);
 		}
@@ -193,7 +213,7 @@ public class JobVertex implements java.io.Serializable {
 			throw new RuntimeException("The user-code class is no subclass of " + AbstractInvokable.class.getName(), e);
 		}
 	}
-	
+
 	/**
 	 * Gets the parallelism of the task.
 	 * 
@@ -214,7 +234,7 @@ public class JobVertex implements java.io.Serializable {
 		}
 		this.parallelism = parallelism;
 	}
-	
+
 	public InputSplitSource<?> getInputSplitSource() {
 		return inputSplitSource;
 	}
@@ -222,15 +242,15 @@ public class JobVertex implements java.io.Serializable {
 	public void setInputSplitSource(InputSplitSource<?> inputSplitSource) {
 		this.inputSplitSource = inputSplitSource;
 	}
-	
+
 	public List<IntermediateDataSet> getProducedDataSets() {
 		return this.results;
 	}
-	
+
 	public List<JobEdge> getInputs() {
 		return this.inputs;
 	}
-	
+
 	/**
 	 * Associates this vertex with a slot sharing group for scheduling. Different vertices in the same
 	 * slot sharing group can run one subtask each in the same slot.
@@ -241,13 +261,13 @@ public class JobVertex implements java.io.Serializable {
 		if (this.slotSharingGroup != null) {
 			this.slotSharingGroup.removeVertexFromGroup(id);
 		}
-		
+
 		this.slotSharingGroup = grp;
 		if (grp != null) {
 			grp.addVertexToGroup(id);
 		}
 	}
-	
+
 	/**
 	 * Gets the slot sharing group that this vertex is associated with. Different vertices in the same
 	 * slot sharing group can run one subtask each in the same slot. If the vertex is not associated with
@@ -258,7 +278,7 @@ public class JobVertex implements java.io.Serializable {
 	public SlotSharingGroup getSlotSharingGroup() {
 		return slotSharingGroup;
 	}
-	
+
 	/**
 	 * Tells this vertex to strictly co locate its subtasks with the subtasks of the given vertex.
 	 * Strict co-location implies that the n'th subtask of this vertex will run on the same parallel computing
@@ -280,10 +300,10 @@ public class JobVertex implements java.io.Serializable {
 		if (this.slotSharingGroup == null || this.slotSharingGroup != strictlyCoLocatedWith.slotSharingGroup) {
 			throw new IllegalArgumentException("Strict co-location requires that both vertices are in the same slot sharing group.");
 		}
-		
+
 		CoLocationGroup thisGroup = this.coLocationGroup;
 		CoLocationGroup otherGroup = strictlyCoLocatedWith.coLocationGroup;
-		
+
 		if (otherGroup == null) {
 			if (thisGroup == null) {
 				CoLocationGroup group = new CoLocationGroup(this, strictlyCoLocatedWith);
@@ -306,15 +326,15 @@ public class JobVertex implements java.io.Serializable {
 			}
 		}
 	}
-	
+
 	public CoLocationGroup getCoLocationGroup() {
 		return coLocationGroup;
 	}
-	
+
 	public void updateCoLocationGroup(CoLocationGroup group) {
 		this.coLocationGroup = group;
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
 
 	public IntermediateDataSet createAndAddResultDataSet(ResultPartitionType partitionType) {
@@ -330,25 +350,38 @@ public class JobVertex implements java.io.Serializable {
 		return result;
 	}
 
-	public void connectDataSetAsInput(IntermediateDataSet dataSet, DistributionPattern distPattern) {
+	public JobEdge connectDataSetAsInput(IntermediateDataSet dataSet, DistributionPattern distPattern) {
 		JobEdge edge = new JobEdge(dataSet, this, distPattern);
 		this.inputs.add(edge);
 		dataSet.addConsumer(edge);
+		return edge;
 	}
 
-	public void connectNewDataSetAsInput(JobVertex input, DistributionPattern distPattern) {
-		connectNewDataSetAsInput(input, distPattern, ResultPartitionType.PIPELINED);
+	public JobEdge connectNewDataSetAsInput(JobVertex input, DistributionPattern distPattern) {
+		return connectNewDataSetAsInput(input, distPattern, ResultPartitionType.PIPELINED, false);
 	}
 
-	public void connectNewDataSetAsInput(
+	public JobEdge connectNewDataSetAsInput(
 			JobVertex input,
 			DistributionPattern distPattern,
 			ResultPartitionType partitionType) {
 
+		return connectNewDataSetAsInput(input, distPattern, partitionType, false);
+	}
+
+	public JobEdge connectNewDataSetAsInput(
+			JobVertex input,
+			DistributionPattern distPattern,
+			ResultPartitionType partitionType,
+			boolean eagerlyDeployConsumers) {
+
 		IntermediateDataSet dataSet = input.createAndAddResultDataSet(partitionType);
+		dataSet.setEagerlyDeployConsumers(eagerlyDeployConsumers);
+
 		JobEdge edge = new JobEdge(dataSet, this, distPattern);
 		this.inputs.add(edge);
 		dataSet.addConsumer(edge);
+		return edge;
 	}
 
 	public void connectIdInput(IntermediateDataSetID dataSetId, DistributionPattern distPattern) {
@@ -357,45 +390,83 @@ public class JobVertex implements java.io.Serializable {
 	}
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	public boolean isInputVertex() {
 		return this.inputs.isEmpty();
 	}
-	
+
+	public boolean isStoppable() {
+		return this.isStoppable;
+	}
+
 	public boolean isOutputVertex() {
 		return this.results.isEmpty();
 	}
-	
+
 	public boolean hasNoConnectedInputs() {
 		for (JobEdge edge : inputs) {
 			if (!edge.isIdReference()) {
 				return false;
 			}
 		}
-		
+
 		return true;
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
 	/**
-	 * A hook that can be overwritten by sub classes to implement logic that is called by the 
+	 * A hook that can be overwritten by sub classes to implement logic that is called by the
 	 * master when the job starts.
 	 * 
 	 * @param loader The class loader for user defined code.
 	 * @throws Exception The method may throw exceptions which cause the job to fail immediately.
 	 */
 	public void initializeOnMaster(ClassLoader loader) throws Exception {}
-	
+
 	/**
-	 * A hook that can be overwritten by sub classes to implement logic that is called by the 
+	 * A hook that can be overwritten by sub classes to implement logic that is called by the
 	 * master after the job completed.
 	 * 
 	 * @param loader The class loader for user defined code.
 	 * @throws Exception The method may throw exceptions which cause the job to fail immediately.
 	 */
 	public void finalizeOnMaster(ClassLoader loader) throws Exception {}
-	
+
+	// --------------------------------------------------------------------------------------------
+
+	public String getOperatorName() {
+		return operatorName;
+	}
+
+	public void setOperatorName(String operatorName) {
+		this.operatorName = operatorName;
+	}
+
+	public String getOperatorDescription() {
+		return operatorDescription;
+	}
+
+	public void setOperatorDescription(String operatorDescription) {
+		this.operatorDescription = operatorDescription;
+	}
+
+	public void setOperatorPrettyName(String operatorPrettyName) {
+		this.operatorPrettyName = operatorPrettyName;
+	}
+
+	public String getOperatorPrettyName() {
+		return operatorPrettyName;
+	}
+
+	public String getResultOptimizerProperties() {
+		return resultOptimizerProperties;
+	}
+
+	public void setResultOptimizerProperties(String resultOptimizerProperties) {
+		this.resultOptimizerProperties = resultOptimizerProperties;
+	}
+
 	// --------------------------------------------------------------------------------------------
 
 	@Override

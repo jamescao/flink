@@ -18,15 +18,19 @@
 
 package org.apache.flink.types.parser;
 
+import org.apache.flink.annotation.PublicEvolving;
+
 /**
  * Converts a variable length field of a byte array into a {@link String}. The byte contents between
  * delimiters is interpreted as an ASCII string. The string may be quoted in double quotes. For quoted
  * strings, whitespaces (space and tab) leading and trailing before and after the quotes are removed.
  */
+@PublicEvolving
 public class StringParser extends FieldParser<String> {
 
 	private boolean quotedStringParsing = false;
 	private byte quoteCharacter;
+	private static final byte BACKSLASH = 92;
 
 	private String result;
 
@@ -46,8 +50,8 @@ public class StringParser extends FieldParser<String> {
 			// quoted string parsing enabled and first character Vis a quote
 			i++;
 
-			// search for ending quote character
-			while(i < limit && bytes[i] != quoteCharacter) {
+			// search for ending quote character, continue when it is escaped
+			while (i < limit && (bytes[i] != quoteCharacter || bytes[i-1] == BACKSLASH)){
 				i++;
 			}
 

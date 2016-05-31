@@ -43,6 +43,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 public class CollectionInputFormatTest {
 	
@@ -79,7 +80,8 @@ public class CollectionInputFormatTest {
 
 	@Test
 	public void testSerializability() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			 ObjectOutputStream out = new ObjectOutputStream(buffer)) {
 			Collection<ElementType> inputCollection = new ArrayList<ElementType>();
 			ElementType element1 = new ElementType(1);
 			ElementType element2 = new ElementType(2);
@@ -93,9 +95,6 @@ public class CollectionInputFormatTest {
 	
 			CollectionInputFormat<ElementType> inputFormat = new CollectionInputFormat<ElementType>(inputCollection,
 					info.createSerializer(new ExecutionConfig()));
-
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
 
 			out.writeObject(inputFormat);
 
@@ -124,6 +123,7 @@ public class CollectionInputFormatTest {
 			e.printStackTrace();
 			fail(e.toString());
 		}
+
 	}
 	
 	@Test
@@ -203,13 +203,11 @@ public class CollectionInputFormatTest {
 	
 	@Test
 	public void testSerializationFailure() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			ObjectOutputStream out = new ObjectOutputStream(buffer)) {
 			// a mock serializer that fails when writing
 			CollectionInputFormat<ElementType> inFormat = new CollectionInputFormat<ElementType>(
 					Collections.singleton(new ElementType()), new TestSerializer(false, true));
-			
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
 			
 			try {
 				out.writeObject(inFormat);
@@ -230,13 +228,12 @@ public class CollectionInputFormatTest {
 	
 	@Test
 	public void testDeserializationFailure() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			 ObjectOutputStream out = new ObjectOutputStream(buffer)) {
 			// a mock serializer that fails when writing
 			CollectionInputFormat<ElementType> inFormat = new CollectionInputFormat<ElementType>(
 					Collections.singleton(new ElementType()), new TestSerializer(true, false));
-			
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
+
 			out.writeObject(inFormat);
 			out.close();
 			
@@ -265,8 +262,8 @@ public class CollectionInputFormatTest {
 
 		private static final long serialVersionUID = 1L;
 		
-		private boolean failOnRead;
-		private boolean failOnWrite;
+		private final boolean failOnRead;
+		private final boolean failOnWrite;
 		
 		public TestSerializer(boolean failOnRead, boolean failOnWrite) {
 			this.failOnRead = failOnRead;
@@ -330,6 +327,27 @@ public class CollectionInputFormatTest {
 		@Override
 		public void copy(DataInputView source, DataOutputView target) throws IOException {
 			target.writeInt(source.readInt());
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (obj instanceof TestSerializer) {
+				TestSerializer other = (TestSerializer) obj;
+
+				return other.canEqual(this) && failOnRead == other.failOnRead && failOnWrite == other.failOnWrite;
+			} else {
+				return false;
+			}
+		}
+
+		@Override
+		public boolean canEqual(Object obj) {
+			return obj instanceof TestSerializer;
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash(failOnRead, failOnWrite);
 		}
 	}
 }

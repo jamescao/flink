@@ -19,6 +19,7 @@
 @import 'nib'
 
 sidebar-width = 250px
+sidebar-width-small = 160px
 
 #sidebar
   overflow: hidden
@@ -39,6 +40,14 @@ sidebar-width = 250px
   .logo
     width: auto
     height: 22px
+    img
+      display: inline-block
+
+  .navbar-static-top
+    overflow: hidden
+    height: 51px
+    .navbar-header
+      width: 100%
 
   .navbar-brand.navbar-brand-text
     font-size: 14px
@@ -73,6 +82,13 @@ sidebar-width = 250px
     .nav-tabs
       margin: 0 -20px
       padding: 0 20px
+      
+  .navbar-secondary-additional
+    border: none
+    padding: 0 20px
+    margin-bottom: 0
+    .nav-tabs
+      margin: 0 -20px
 
   &.sidebar-visible
     margin-left: sidebar-width
@@ -108,13 +124,141 @@ sidebar-width = 250px
     margin-bottom: 20px
 
 .table
+  .table
+    background-color: transparent
+
   th
     font-weight: normal
     color: #999999
+    
+  td.td-long
+    width: 20%
+    white-space: pre-wrap
+    white-space: -moz-pre-wrap
+    white-space: -pre-wrap
+    white-space: -o-pre-wrap
+    word-wrap: break-word
 
   &.table-clickable
     tr
       cursor: pointer
+        
+  &.table-inner
+    background-color: transparent
+
+  &.table-properties
+    table-layout: fixed
+    white-space: nowrap
+    td
+      width: 50%
+      white-space: nowrap
+      overflow: hidden
+      text-overflow: ellipsis
+
+  &.table-body-hover
+    > tbody
+      border-top: none
+      border-left: 2px solid transparent
+      &.active
+        border-left: 2px solid #000000
+      &:hover, &.active
+        td:not(.tab-column)
+          background-color: #f0f0f0
+        td.tab-column li.active
+          background-color: #f0f0f0
+      
+  &.table-activable
+    th.tab-column, td.tab-column
+      border-top: none
+      width: 47px
+
+    td.tab-column
+      border-right: 1px solid #dddddd
+      
+    td
+      position: relative
+
+  &.table-no-border
+    th
+      border-top: none !important
+    td
+      border-top: none !important
+
+  &#job-submit-table
+    table-layout: fixed
+    white-space: nowrap
+    td.td-large
+      width: 40%
+    td
+      width: 15%
+      > input
+        height: 28px
+        font-size: 14px
+      > span.btn
+        padding: 2px 4px
+        font-size: 14px
+
+  &#add-file-table
+    table-layout: fixed
+
+    span.btn
+      position: relative
+      overflow: hidden
+      padding: 2px 4px
+      font-size: 14px
+      border-radius: 2px
+      margin-top: -3px
+
+    td#add-file-button
+      width: 100px
+
+      input[type=file]
+        position: absolute
+        top: 0
+        right: 0
+        min-width: 100%
+        min-height: 100%
+        filter: unquote("alpha(opacity=0)")
+        opacity: 0
+        outline: none
+        cursor: inherit
+        display: block
+
+    td#add-file-name
+      width: 250px
+      text-overflow: ellipsis
+      overflow: hidden
+      white-space: nowrap
+
+    td#add-file-status
+      width: 100%
+
+      span.btn-progress-bar
+        padding: 0 !important
+        width: 100%
+        background-color: #f5f5f5
+        text-align: left
+      span.btn-progress
+        padding: 2px 2px
+        font-size: 10px
+
+
+  span.error-area
+    color: red
+
+  span.row-button
+    padding: 1px 2px
+    margin: 0
+    border: none !important
+
+  .small-label
+    text-transform: uppercase
+    font-size: 13px
+    color: #999999
+
+span.icon-wrapper
+  width: 1.2em
+  display: inline-block
 
 .panel
   &.panel-dashboard
@@ -129,7 +273,7 @@ sidebar-width = 250px
 .navbar-secondary
   overflow: auto
 
-.navbar-main, .navbar-secondary, .navbar-main-additional, .panel.panel-multi
+.navbar-main, .navbar-secondary, .navbar-main-additional, .panel.panel-multi, .navbar-secondary-additional
   .navbar-title, .panel-title
     float: left
     font-size: 18px
@@ -163,14 +307,22 @@ sidebar-width = 250px
 .panel.panel-multi
   .panel-heading
     padding: 0
+    
+    .panel-info
+      &.thin
+        padding: 8px 10px
 
   .panel-body
     padding: 10px
     background-color: #fdfdfd
     color: #999
     font-size: 13px
+    
+    &.clean
+      color: inherit
+      font-size: inherit
 
-.navbar-main-additional
+.navbar-main-additional, .navbar-secondary-additional
   min-height: 40px
   background-color: #fdfdfd
 
@@ -248,12 +400,84 @@ sidebar-width = 250px
   &.indicator-danger
     color: #d9534f
 
+pre.exception
+  border: none
+  background-color: transparent
+  padding: 0
+  margin: 0
+
+pre
+  white-space: pre-wrap
+  white-space: -moz-pre-wrap
+  white-space: -pre-wrap
+  white-space: -o-pre-wrap
+  word-wrap: break-word
+
+.nav-tabs
+  &.tabs-vertical
+    // float: right
+    position: absolute
+    left: 0
+    top: 0
+    border-bottom: none
+    // border-right: 1px solid #dddddd
+    z-index: 100
+    li
+      float: none
+      margin-bottom: 0
+      margin-right: -1px
+      
+      > a
+        margin-right: 0
+        border-radius(0)
+        border-bottom: none
+        border-left: 2px solid transparent
+
+      > a:hover, > a:focus
+        border-bottom: none
+        border-left: 2px solid #000000
+        
+      &.active
+        > a
+          border-bottom: none
+          border-left: 2px solid #000000
+
+.navbar-main, .navbar-secondary, .navbar-main-additional, .navbar-secondary-additional
+  .navbar-title
+    padding: 12px 20px 13px 20px
+
+livechart
+  width: 30%
+  height: 30%
+  text-align: center
 
 @import './job'
 @import './graph'
 @import './timeline'
 
-@media (min-width: 768px)
+@media (min-width: 1024px) and (max-width: 1279px)
+  #sidebar
+    left: 0
+    width: sidebar-width-small
+    
+    .navbar-static-top
+      .navbar-brand-text
+        display: none
+
+  #content
+    margin-left: sidebar-width-small
+
+    #fold-button
+      display: none
+
+    .navbar-main, .navbar-main-additional
+      left: sidebar-width-small
+
+  .table
+    td.td-long
+      width: 20%
+
+@media (min-width: 1280px)
   #sidebar
     left: 0
 
@@ -266,6 +490,31 @@ sidebar-width = 250px
     .navbar-main, .navbar-main-additional
       left: sidebar-width
 
-  .navbar-main, .navbar-secondary, .navbar-main-additional
-    .navbar-title
-      padding: 12px 20px 13px 20px
+  .table
+    td.td-long
+      width: 30%
+
+.legend-box
+  font-size: 10px
+  width: 2em
+
+#total-mem
+  background-color: #7cb5ec
+
+#heap-mem
+  background-color: #434348
+
+#non-heap-mem
+  background-color: #90ed7d
+
+.show-pointer
+  cursor: pointer
+
+#fetch-plan
+  width: 100px
+
+#job-submit
+  width: 100px
+
+
+

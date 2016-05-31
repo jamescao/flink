@@ -22,7 +22,6 @@ import com.google.common.base.Preconditions;
 import org.apache.flink.runtime.akka.FlinkUntypedActor;
 import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.messages.ExecutionGraphMessages;
-import scala.Option;
 
 import java.util.UUID;
 
@@ -33,18 +32,15 @@ import java.util.UUID;
 public class CheckpointCoordinatorDeActivator extends FlinkUntypedActor {
 
 	private final CheckpointCoordinator coordinator;
-	private final long interval;
-	private final Option<UUID> leaderSessionID;
+	private final UUID leaderSessionID;
 	
 	public CheckpointCoordinatorDeActivator(
 			CheckpointCoordinator coordinator,
-			long interval,
-			Option<UUID> leaderSessionID) {
-		Preconditions.checkNotNull(coordinator, "The checkpointCoordinator must not be null.");
-		Preconditions.checkNotNull(leaderSessionID, "The leaderSesssionID must not be null.");
+			UUID leaderSessionID) {
 
-		this.coordinator = coordinator;
-		this.interval = interval;
+		LOG.info("Create CheckpointCoordinatorDeActivator");
+
+		this.coordinator = Preconditions.checkNotNull(coordinator, "The checkpointCoordinator must not be null.");
 		this.leaderSessionID = leaderSessionID;
 	}
 
@@ -55,11 +51,10 @@ public class CheckpointCoordinatorDeActivator extends FlinkUntypedActor {
 			
 			if (status == JobStatus.RUNNING) {
 				// start the checkpoint scheduler
-				coordinator.startPeriodicCheckpointScheduler(interval);
-			}
-			else {
+				coordinator.startCheckpointScheduler();
+			} else {
 				// anything else should stop the trigger for now
-				coordinator.stopPeriodicCheckpointScheduler();
+				coordinator.stopCheckpointScheduler();
 			}
 		}
 		
@@ -67,7 +62,7 @@ public class CheckpointCoordinatorDeActivator extends FlinkUntypedActor {
 	}
 
 	@Override
-	public Option<UUID> getLeaderSessionID() {
+	public UUID getLeaderSessionID() {
 		return leaderSessionID;
 	}
 }

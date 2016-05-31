@@ -42,7 +42,7 @@ import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.util.ExecutorThreadFactory;
-import org.apache.flink.runtime.util.IOUtils;
+import org.apache.flink.util.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,7 +50,7 @@ import org.slf4j.LoggerFactory;
 /**
  * The FileCache is used to create the local files for the registered cache files when a task is deployed.
  * The files will be removed when the task is unregistered after a 5 second delay.
- * A given file x will be placed in "<system-tmp-dir>/tmp_<jobID>/".
+ * A given file x will be placed in "{@code <system-tmp-dir>/tmp_<jobID>/}".
  */
 public class FileCache {
 
@@ -77,10 +77,10 @@ public class FileCache {
 				ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH);
 
 		String[] directories = tempDirs.split(",|" + File.pathSeparator);
-		String cacheDirName = "flink-dist-cache-" + UUID.randomUUID().toString();
 		storageDirectories = new File[directories.length];
 
 		for (int i = 0; i < directories.length; i++) {
+			String cacheDirName = "flink-dist-cache-" + UUID.randomUUID().toString();
 			storageDirectories[i] = new File(directories[i], cacheDirName);
 			String path = storageDirectories[i].getAbsolutePath();
 

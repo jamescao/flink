@@ -21,6 +21,8 @@ package org.apache.flink.runtime.io.network.api.serialization;
 import org.apache.flink.core.io.IOReadableWritable;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.MemorySegment;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.groups.IOMetricGroup;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.util.DataInputDeserializer;
@@ -47,6 +49,9 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 	private Buffer currentBuffer;
 
 	private AccumulatorRegistry.Reporter reporter;
+	
+	private transient Counter numRecordsIn;
+	private transient Counter numBytesIn;
 
 	public AdaptiveSpanningRecordDeserializer() {
 		this.nonSpanningWrapper = new NonSpanningWrapper();
@@ -96,6 +101,9 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 			if (reporter != null) {
 				reporter.reportNumBytesIn(len);
 			}
+			if (numBytesIn != null) {
+				numBytesIn.inc(len);
+			}
 
 			if (len <= nonSpanningRemaining - 4) {
 				// we can get a full record from here
@@ -103,6 +111,9 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 
 				if (reporter != null) {
 					reporter.reportNumRecordsIn(1);
+				}
+				if (numRecordsIn != null) {
+					numRecordsIn.inc();
 				}
 
 				return (this.nonSpanningWrapper.remaining() == 0) ?
@@ -130,6 +141,9 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 
 			if (reporter != null) {
 				reporter.reportNumRecordsIn(1);
+			}
+			if (numRecordsIn != null) {
+				numRecordsIn.inc();
 			}
 
 			// move the remainder to the non-spanning wrapper
@@ -163,6 +177,12 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 	public void setReporter(AccumulatorRegistry.Reporter reporter) {
 		this.reporter = reporter;
 		this.spanningWrapper.setReporter(reporter);
+	}
+
+	@Override
+	public void instantiateMetrics(IOMetricGroup metrics) {
+		numBytesIn = metrics.getBytesInCounter();
+		numRecordsIn = metrics.getRecordsInCounter();
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------
@@ -230,21 +250,21 @@ public class AdaptiveSpanningRecordDeserializer<T extends IOReadableWritable> im
 
 		@Override
 		public final short readShort() throws IOException {
-			final short v = this.segment.getShort(this.position);
+			final short v = this.segment.getShortBigEndian(this.position);
 			this.position += 2;
 			return v;
 		}
 
 		@Override
 		public final int readUnsignedShort() throws IOException {
-			final int v = this.segment.getShort(this.position) & 0xffff;
+			final int v = this.segment.getShortBigEndian(this.position) & 0xffff;
 			this.position += 2;
 			return v;
 		}
 
 		@Override
 		public final char readChar() throws IOException  {
-			final char v = this.segment.getChar(this.position);
+			final char v = this.segment.getCharBigEndian(this.position);
 			this.position += 2;
 			return v;
 		}

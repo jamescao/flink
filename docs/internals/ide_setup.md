@@ -1,5 +1,8 @@
 ---
-title: "IDE setup"
+title: "IDE Setup"
+# Top navigation
+top-nav-group: internals
+top-nav-pos: 1
 ---
 <!--
 Licensed to the Apache Software Foundation (ASF) under one
@@ -70,6 +73,10 @@ and manually add the Scala and Maven plugins by plugin site at [http://scala-ide
 * Either use the update site to install the plugin ("Help" -> "Install new Software")
 * Or download the [zip file](http://download.scala-ide.org/sdk/helium/e38/scala211/stable/update-site.zip), unpack it, and move the contents of the
   "plugins" and "features" folders into the equally named folders of the Eclipse root directory
+
+**NOTE:** It might happen that some modules do not build in Eclipse correctly (even if the maven build succeeds).
+To fix this, right-click in the corresponding Eclipse project and choose "Properties" and than "Maven".
+Uncheck the box labeled "Resolve dependencies from Workspace projects", click "Apply" and then "OK". "
 
 
 ### Eclipse Scala IDE 4.0.0

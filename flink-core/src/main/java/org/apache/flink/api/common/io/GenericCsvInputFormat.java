@@ -16,19 +16,16 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.api.common.io;
 
-import com.google.common.base.Charsets;
-import com.google.common.base.Preconditions;
-import com.google.common.primitives.Ints;
-
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.core.fs.FileInputSplit;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.types.parser.FieldParser;
 import org.apache.flink.types.parser.StringParser;
 import org.apache.flink.types.parser.StringValueParser;
 import org.apache.flink.util.InstantiationUtil;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,18 +37,27 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.TreeMap;
 
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
+@Internal
 public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT> {
 
-	private static final Logger LOG = LoggerFactory.getLogger(GenericCsvInputFormat.class);
-	
 	private static final long serialVersionUID = 1L;
 	
-	private static final Class<?>[] EMPTY_TYPES = new Class[0];
+	
+	private static final Logger LOG = LoggerFactory.getLogger(GenericCsvInputFormat.class);
+
+	/** The default charset  to convert strings to bytes */
+	private static final Charset UTF_8_CHARSET = Charset.forName("UTF-8");
+	
+	private static final Class<?>[] EMPTY_TYPES = new Class<?>[0];
 	
 	private static final boolean[] EMPTY_INCLUDED = new boolean[0];
 	
 	private static final byte[] DEFAULT_FIELD_DELIMITER = new byte[] {','};
+
+	private static final byte BACKSLASH = 92;
 
 	// --------------------------------------------------------------------------------------------
 	//  Variables for internal operation.
@@ -124,7 +130,7 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 	}
 
 	public void setCommentPrefix(String commentPrefix) {
-		setCommentPrefix(commentPrefix, Charsets.UTF_8);
+		setCommentPrefix(commentPrefix, UTF_8_CHARSET);
 	}
 
 	public void setCommentPrefix(String commentPrefix, String charsetName) throws IllegalCharsetNameException, UnsupportedCharsetException {
@@ -168,7 +174,7 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 	}
 
 	public void setFieldDelimiter(String delimiter) {
-		this.fieldDelim = delimiter.getBytes(Charsets.UTF_8);
+		this.fieldDelim = delimiter.getBytes(UTF_8_CHARSET);
 	}
 
 	public boolean isLenient() {
@@ -239,15 +245,14 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 				fieldIncluded[i] = true;
 			}
 		}
-		
-		Class<?>[] denseTypeArray = (Class<?>[]) types.toArray(new Class[types.size()]);
-		this.fieldTypes = denseTypeArray;
+
+		this.fieldTypes = types.toArray(new Class<?>[types.size()]);
 	}
 	
 	protected void setFieldsGeneric(int[] sourceFieldIndices, Class<?>[] fieldTypes) {
-		Preconditions.checkNotNull(sourceFieldIndices);
-		Preconditions.checkNotNull(fieldTypes);
-		Preconditions.checkArgument(sourceFieldIndices.length == fieldTypes.length,
+		checkNotNull(sourceFieldIndices);
+		checkNotNull(fieldTypes);
+		checkArgument(sourceFieldIndices.length == fieldTypes.length,
 			"Number of field indices and field types must match.");
 
 		for (int i : sourceFieldIndices) {
@@ -256,7 +261,7 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 			}
 		}
 
-		int largestFieldIndex = Ints.max(sourceFieldIndices);
+		int largestFieldIndex = max(sourceFieldIndices);
 		this.fieldIncluded = new boolean[largestFieldIndex + 1];
 		ArrayList<Class<?>> types = new ArrayList<Class<?>>();
 
@@ -274,13 +279,12 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 			}
 		}
 
-		Class<?>[] denseTypeArray = (Class<?>[]) types.toArray(new Class[types.size()]);
-		this.fieldTypes = denseTypeArray;
+		this.fieldTypes = types.toArray(new Class<?>[types.size()]);
 	}
 	
 	protected void setFieldsGeneric(boolean[] includedMask, Class<?>[] fieldTypes) {
-		Preconditions.checkNotNull(includedMask);
-		Preconditions.checkNotNull(fieldTypes);
+		checkNotNull(includedMask);
+		checkNotNull(fieldTypes);
 
 		ArrayList<Class<?>> types = new ArrayList<Class<?>>();
 
@@ -306,8 +310,7 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 			}
 		}
 
-		Class<?>[] denseTypeArray = (Class<?>[]) types.toArray(new Class[types.size()]);
-		this.fieldTypes = denseTypeArray;
+		this.fieldTypes = types.toArray(new Class<?>[types.size()]);
 		this.fieldIncluded = includedMask;
 	}
 
@@ -320,7 +323,7 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 		super.open(split);
 		
 		// instantiate the parsers
-		FieldParser<?>[] parsers = new FieldParser[fieldTypes.length];
+		FieldParser<?>[] parsers = new FieldParser<?>[fieldTypes.length];
 		
 		for (int i = 0; i < fieldTypes.length; i++) {
 			if (fieldTypes[i] != null) {
@@ -440,12 +443,13 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 
 		final int delimLimit = limit - delim.length + 1;
 
-		if(quotedStringParsing == true && bytes[i] == quoteCharacter) {
+		if (quotedStringParsing && bytes[i] == quoteCharacter) {
 
 			// quoted string parsing enabled and field is quoted
-			// search for ending quote character
+			// search for ending quote character, continue when it is escaped
 			i++;
-			while(i < limit && bytes[i] != quoteCharacter) {
+
+			while (i < limit && (bytes[i] != quoteCharacter || bytes[i-1] == BACKSLASH)){
 				i++;
 			}
 			i++;
@@ -528,5 +532,15 @@ public abstract class GenericCsvInputFormat<OT> extends DelimitedInputFormat<OT>
 
 			lastPos = positions[i];
 		}
+	}
+	
+	private static int max(int[] ints) {
+		checkArgument(ints.length > 0);
+		
+		int max = ints[0];
+		for (int i = 1 ; i < ints.length; i++) {
+			max = Math.max(max, ints[i]);
+		}
+		return max;
 	}
 }

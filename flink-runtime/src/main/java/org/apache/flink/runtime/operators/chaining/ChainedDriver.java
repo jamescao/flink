@@ -22,9 +22,10 @@ import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.functions.Function;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
-import org.apache.flink.runtime.operators.RegularPactTask;
+import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.operators.util.DistributedRuntimeUDFContext;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.util.Collector;
@@ -32,7 +33,7 @@ import org.apache.flink.util.Collector;
 import java.util.Map;
 
 /**
- * The interface to be implemented by drivers that do not run in an own pact task context, but are chained to other
+ * The interface to be implemented by drivers that do not run in an own task context, but are chained to other
  * tasks.
  */
 public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
@@ -50,6 +51,8 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 	protected ExecutionConfig executionConfig;
 
 	protected boolean objectReuseEnabled = false;
+	
+	protected MetricGroup metrics;
 
 	
 	public void setup(TaskConfig config, String taskName, Collector<OT> outputCollector,
@@ -60,15 +63,15 @@ public abstract class ChainedDriver<IT, OT> implements Collector<IT> {
 		this.taskName = taskName;
 		this.outputCollector = outputCollector;
 		this.userCodeClassLoader = userCodeClassLoader;
+		this.metrics = parent.getEnvironment().getMetricGroup().addOperator(taskName);
 
 		Environment env = parent.getEnvironment();
 
-		if (parent instanceof RegularPactTask) {
-			this.udfContext = ((RegularPactTask<?, ?>) parent).createRuntimeContext(taskName);
+		if (parent instanceof BatchTask) {
+			this.udfContext = ((BatchTask<?, ?>) parent).createRuntimeContext(metrics);
 		} else {
-			this.udfContext = new DistributedRuntimeUDFContext(taskName, env.getNumberOfSubtasks(),
-					env.getIndexInSubtaskGroup(), userCodeClassLoader, parent.getExecutionConfig(),
-					env.getDistributedCacheEntries(), accumulatorMap
+			this.udfContext = new DistributedRuntimeUDFContext(env.getTaskInfo(), userCodeClassLoader,
+					parent.getExecutionConfig(), env.getDistributedCacheEntries(), accumulatorMap, metrics
 			);
 		}
 

@@ -22,35 +22,42 @@ USAGE="Usage: start-cluster.sh [batch|streaming]"
 
 STREAMING_MODE=$1
 
-if [[ -z $STREAMING_MODE ]]; then
-    STREAMING_MODE="batch"
-fi
-
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
 . "$bin"/config.sh
 
 # Start the JobManager instance(s)
-if [[ -z $ZK_QUORUM ]]; then
-    echo "Starting cluster (${STREAMING_MODE} mode)."
-
-    # Start single JobManager on this machine
-    "$bin"/jobmanager.sh start cluster ${STREAMING_MODE}
-else
+shopt -s nocasematch
+if [[ $RECOVERY_MODE == "zookeeper" ]]; then
     # HA Mode
     readMasters
 
-    echo "Starting HA cluster (${STREAMING_MODE} mode) with ${#MASTERS[@]} masters and ${#ZK_QUORUM[@]} peers in ZooKeeper quorum."
+    echo "Starting HA cluster with ${#MASTERS[@]} masters."
 
-    for master in ${MASTERS[@]}; do
-        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l $FLINK_BIN_DIR/jobmanager.sh start cluster ${STREAMING_MODE} ${master} &"
+    for ((i=0;i<${#MASTERS[@]};++i)); do
+        master=${MASTERS[i]}
+        webuiport=${WEBUIPORTS[i]}
+        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" start cluster ${master} ${webuiport} &"
     done
-fi
 
-# Start TaskManager instance(s)
+else
+    echo "Starting cluster."
+
+    # Start single JobManager on this machine
+    "$FLINK_BIN_DIR"/jobmanager.sh start cluster
+fi
+shopt -u nocasematch
+
+# Start TaskManager instance(s) using pdsh (Parallel Distributed Shell) when available
 readSlaves
 
-for slave in ${SLAVES[@]}; do
-    ssh -n $FLINK_SSH_OPTS $slave -- "nohup /bin/bash -l $bin/taskmanager.sh start ${STREAMING_MODE} &"
-done
+command -v pdsh >/dev/null 2>&1
+if [[ $? -ne 0 ]]; then
+    for slave in ${SLAVES[@]}; do
+        ssh -n $FLINK_SSH_OPTS $slave -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" start &"
+    done
+else
+    PDSH_SSH_ARGS="" PDSH_SSH_ARGS_APPEND=$FLINK_SSH_OPTS pdsh -w $(IFS=, ; echo "${SLAVES[*]}") \
+        "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" start"
+fi

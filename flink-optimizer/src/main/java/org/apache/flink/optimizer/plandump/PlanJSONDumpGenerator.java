@@ -39,7 +39,6 @@ import org.apache.flink.optimizer.dag.BulkIterationNode;
 import org.apache.flink.optimizer.dag.DataSinkNode;
 import org.apache.flink.optimizer.dag.DataSourceNode;
 import org.apache.flink.optimizer.dag.OptimizerNode;
-import org.apache.flink.optimizer.dag.DagConnection;
 import org.apache.flink.optimizer.dag.TempMode;
 import org.apache.flink.optimizer.dag.WorksetIterationNode;
 import org.apache.flink.optimizer.dataproperties.GlobalProperties;
@@ -56,9 +55,7 @@ import org.apache.flink.runtime.operators.DriverStrategy;
 import org.apache.flink.runtime.operators.shipping.ShipStrategyType;
 import org.apache.flink.util.StringUtils;
 
-/**
- * 
- */
+
 public class PlanJSONDumpGenerator {
 	
 	private Map<DumpableNode<?>, Integer> nodeIds; // resolves pact nodes to ids
@@ -260,7 +257,7 @@ public class PlanJSONDumpGenerator {
 		}
 		
 		
-		String name = n.getName();
+		String name = n.getOperatorName();
 		if (name.equals("Reduce") && (node instanceof SingleInputPlanNode) && 
 				((SingleInputPlanNode) node).getDriverStrategy() == DriverStrategy.SORTED_GROUP_COMBINE) {
 			name = "Combine";
@@ -293,11 +290,13 @@ public class PlanJSONDumpGenerator {
 				final DumpableNode<?> source = inConn.getSource();
 				writer.print(inputNum == 0 ? "\n" : ",\n");
 				if (inputNum == 0) {
-					child1name += child1name.length() > 0 ? ", " : ""; 
-					child1name += source.getOptimizerNode().getOperator().getName();
+					child1name += child1name.length() > 0 ? ", " : "";
+					child1name += source.getOptimizerNode().getOperator().getName() +
+						" (id: " + this.nodeIds.get(source) + ")";
 				} else if (inputNum == 1) {
-					child2name += child2name.length() > 0 ? ", " : ""; 
-					child2name = source.getOptimizerNode().getOperator().getName();
+					child2name += child2name.length() > 0 ? ", " : "";
+					child2name += source.getOptimizerNode().getOperator().getName() +
+						" (id: " + this.nodeIds.get(source) + ")";
 				}
 
 				// output predecessor id
@@ -309,8 +308,9 @@ public class PlanJSONDumpGenerator {
 				}
 				// output shipping strategy and channel type
 				final Channel channel = (inConn instanceof Channel) ? (Channel) inConn : null; 
-				final ShipStrategyType shipType = channel != null ? channel.getShipStrategy() :
-						((DagConnection) inConn).getShipStrategy();
+				final ShipStrategyType shipType = channel != null ? 
+						channel.getShipStrategy() :
+						inConn.getShipStrategy();
 					
 				String shipStrategy = null;
 				if (shipType != null) {
@@ -384,6 +384,11 @@ public class PlanJSONDumpGenerator {
 						String tempMode = channel.getTempMode().toString();
 						writer.print(", \"temp_mode\": \"" + tempMode + "\"");
 					}
+
+					if (channel != null) {
+						String exchangeMode = channel.getDataExchangeMode().toString();
+						writer.print(", \"exchange_mode\": \"" + exchangeMode + "\"");
+					}
 				}
 				
 				writer.print('}');
@@ -415,7 +420,6 @@ public class PlanJSONDumpGenerator {
 				locString = "No-Op";
 				break;
 				
-			case COLLECTOR_MAP:
 			case MAP:
 				locString = "Map";
 				break;
@@ -480,7 +484,7 @@ public class PlanJSONDumpGenerator {
 				locString = "Nested Loops (Streamed Outer: " + child2name + ")";
 				break;
 
-			case MERGE:
+			case INNER_MERGE:
 				locString = "Merge";
 				break;
 
@@ -623,11 +627,11 @@ public class PlanJSONDumpGenerator {
 		writer.print("\" }");
 	}
 
-	public static final String formatNumber(double number) {
+	public static String formatNumber(double number) {
 		return formatNumber(number, "");
 	}
 
-	public static final String formatNumber(double number, String suffix) {
+	public static String formatNumber(double number, String suffix) {
 		if (number <= 0.0) {
 			return String.valueOf(number);
 		}

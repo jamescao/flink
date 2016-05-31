@@ -25,11 +25,14 @@ import static org.mockito.Mockito.when;
 import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.flink.api.common.ExecutionConfigTest;
 import org.apache.flink.api.common.io.StrictlyLocalAssignment;
 import org.apache.flink.core.io.InputSplitAssigner;
 import org.apache.flink.core.io.InputSplitSource;
 import org.apache.flink.core.io.LocatableInputSplit;
 import org.apache.flink.runtime.JobException;
+import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.executiongraph.restart.NoRestartStrategy;
 import org.apache.flink.runtime.instance.HardwareDescription;
 import org.apache.flink.runtime.instance.Instance;
 import org.apache.flink.runtime.instance.InstanceConnectionInfo;
@@ -266,11 +269,13 @@ public class LocalInputSplitsTest {
 			JobGraph jobGraph = new JobGraph("test job", vertex);
 			
 			ExecutionGraph eg = new ExecutionGraph(
-					TestingUtils.defaultExecutionContext(),
-					jobGraph.getJobID(),
-					jobGraph.getName(),
-					jobGraph.getJobConfiguration(),
-					TIMEOUT);
+				TestingUtils.defaultExecutionContext(), 
+				jobGraph.getJobID(),
+				jobGraph.getName(),  
+				jobGraph.getJobConfiguration(),
+				ExecutionConfigTest.getSerializedConfig(),
+				TIMEOUT,
+				new NoRestartStrategy());
 			
 			eg.attachJobGraph(jobGraph.getVerticesSortedTopologicallyFromSources());
 			eg.setQueuedSchedulingAllowed(false);
@@ -329,11 +334,14 @@ public class LocalInputSplitsTest {
 		JobGraph jobGraph = new JobGraph("test job", vertex);
 		
 		ExecutionGraph eg = new ExecutionGraph(
-				TestingUtils.defaultExecutionContext(),
-				jobGraph.getJobID(),
-				jobGraph.getName(),
-				jobGraph.getJobConfiguration(),
-				TIMEOUT);
+			TestingUtils.defaultExecutionContext(),
+			jobGraph.getJobID(),
+			jobGraph.getName(),  
+			jobGraph.getJobConfiguration(),
+			ExecutionConfigTest.getSerializedConfig(),
+			TIMEOUT,
+			new NoRestartStrategy());
+		
 		eg.setQueuedSchedulingAllowed(false);
 		
 		eg.attachJobGraph(jobGraph.getVerticesSortedTopologicallyFromSources());
@@ -380,6 +388,7 @@ public class LocalInputSplitsTest {
 				new ExecutionGraphTestUtils.SimpleActorGateway(
 						TestingUtils.defaultExecutionContext()),
 				connection,
+				ResourceID.generate(),
 				new InstanceID(),
 				hardwareDescription,
 				slots);

@@ -18,23 +18,11 @@
 
 package org.apache.flink.api.common.io;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import com.google.common.base.Preconditions;
+import org.apache.flink.annotation.Public;
 import org.apache.flink.api.common.io.compression.DeflateInflaterInputStreamFactory;
 import org.apache.flink.api.common.io.compression.GzipInflaterInputStreamFactory;
 import org.apache.flink.api.common.io.compression.InflaterInputStreamFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
-import org.apache.flink.api.common.operators.GenericDataSourceBase;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
@@ -45,8 +33,22 @@ import org.apache.flink.core.fs.FileStatus;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import static org.apache.flink.util.Preconditions.checkNotNull;
+
 /**
- * The base class for {@link InputFormat}s that read from files. For specific input types the 
+ * The base class for {@link RichInputFormat}s that read from files. For specific input types the
  * {@link #nextRecord(Object)} and {@link #reachedEnd()} methods need to be implemented.
  * Additionally, one may override {@link #open(FileInputSplit)} and {@link #close()} to
  * change the life cycle behavior.
@@ -54,7 +56,8 @@ import org.apache.flink.core.fs.Path;
  * <p>After the {@link #open(FileInputSplit)} method completed, the file input data is available
  * from the {@link #stream} field.</p>
  */
-public abstract class FileInputFormat<OT> implements InputFormat<OT, FileInputSplit> {
+@Public
+public abstract class FileInputFormat<OT> extends RichInputFormat<OT, FileInputSplit> {
 	
 	// -------------------------------------- Constants -------------------------------------------
 	
@@ -142,7 +145,7 @@ public abstract class FileInputFormat<OT> implements InputFormat<OT, FileInputSp
 	 * @return the extension of the file name or {@code null} if there is no extension.
 	 */
 	protected static String extractFileExtension(String fileName) {
-		Preconditions.checkNotNull(fileName);
+		checkNotNull(fileName);
 		int lastPeriodIndex = fileName.lastIndexOf('.');
 		if (lastPeriodIndex < 0){
 			return null;
@@ -922,69 +925,4 @@ public abstract class FileInputFormat<OT> implements InputFormat<OT, FileInputSp
 	 * The config parameter which defines whether input directories are recursively traversed.
 	 */
 	public static final String ENUMERATE_NESTED_FILES_FLAG = "recursive.file.enumeration";
-	
-	
-	// ----------------------------------- Config Builder -----------------------------------------
-	
-	/**
-	 * Creates a configuration builder that can be used to set the input format's parameters to the config in a fluent
-	 * fashion.
-	 * 
-	 * @return A config builder for setting parameters.
-	 */
-	public static ConfigBuilder configureFileFormat(GenericDataSourceBase<?, ?> target) {
-		return new ConfigBuilder(target.getParameters());
-	}
-	
-	/**
-	 * Abstract builder used to set parameters to the input format's configuration in a fluent way.
-	 */
-	protected static abstract class AbstractConfigBuilder<T> {
-		/**
-		 * The configuration into which the parameters will be written.
-		 */
-		protected final Configuration config;
-		
-		// --------------------------------------------------------------------
-		
-		/**
-		 * Creates a new builder for the given configuration.
-		 * 
-		 * @param targetConfig The configuration into which the parameters will be written.
-		 */
-		protected AbstractConfigBuilder(Configuration targetConfig) {
-			this.config = targetConfig;
-		}
-		
-		// --------------------------------------------------------------------
-		
-		/**
-		 * Sets the path to the file or directory to be read by this file input format.
-		 * 
-		 * @param filePath The path to the file or directory.
-		 * @return The builder itself.
-		 */
-		public T filePath(String filePath) {
-			this.config.setString(FILE_PARAMETER_KEY, filePath);
-			@SuppressWarnings("unchecked")
-			T ret = (T) this;
-			return ret;
-		}
-	}
-	
-	/**
-	 * A builder used to set parameters to the input format's configuration in a fluent way.
-	 */
-	public static class ConfigBuilder extends AbstractConfigBuilder<ConfigBuilder> {
-		
-		/**
-		 * Creates a new builder for the given configuration.
-		 * 
-		 * @param targetConfig The configuration into which the parameters will be written.
-		 */
-		protected ConfigBuilder(Configuration targetConfig) {
-			super(targetConfig);
-		}
-		
-	}
 }

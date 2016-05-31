@@ -35,7 +35,8 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobmanager.scheduler.Scheduler;
 import org.apache.flink.runtime.messages.Messages;
-import org.apache.flink.runtime.messages.TaskMessages;
+import org.apache.flink.runtime.messages.TaskMessages.SubmitTask;
+import org.apache.flink.runtime.messages.TaskMessages.CancelTask;
 import org.apache.flink.runtime.messages.TaskMessages.TaskOperationResult;
 import org.apache.flink.runtime.testingUtils.TestingUtils;
 
@@ -398,15 +399,13 @@ public class ExecutionVertexCancelTest {
 
 			vertex.cancel();
 
-			assertEquals(ExecutionState.FAILED, vertex.getExecutionState());
+			// Callback fails, leading to CANCELED
+			assertEquals(ExecutionState.CANCELED, vertex.getExecutionState());
 
 			assertTrue(slot.isReleased());
 
-			assertNotNull(vertex.getFailureCause());
-
 			assertTrue(vertex.getStateTimestamp(ExecutionState.CREATED) > 0);
 			assertTrue(vertex.getStateTimestamp(ExecutionState.CANCELING) > 0);
-			assertTrue(vertex.getStateTimestamp(ExecutionState.FAILED) > 0);
 		} catch (Exception e) {
 			e.printStackTrace();
 			fail(e.getMessage());
@@ -550,8 +549,7 @@ public class ExecutionVertexCancelTest {
 				Exception failureCause = new Exception("test exception");
 
 				vertex.fail(failureCause);
-				assertEquals(ExecutionState.FAILED, vertex.getExecutionState());
-				assertEquals(failureCause, vertex.getFailureCause());
+				assertEquals(ExecutionState.CANCELED, vertex.getExecutionState());
 
 				assertTrue(slot.isReleased());
 			}
@@ -574,9 +572,9 @@ public class ExecutionVertexCancelTest {
 		@Override
 		public Object handleMessage(Object message) throws Exception {
 			Object result;
-			if(message instanceof TaskMessages.SubmitTask) {
+			if(message instanceof SubmitTask) {
 				result = Messages.getAcknowledge();
-			} else if(message instanceof TaskMessages.CancelTask) {
+			} else if(message instanceof CancelTask) {
 				index++;
 
 				if(index >= results.length){

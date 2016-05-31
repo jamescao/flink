@@ -18,22 +18,23 @@
 
 package org.apache.flink.api.scala.runtime.jobmanager
 
-import akka.actor.Status.Success
 import akka.actor.{ActorSystem, PoisonPill}
 import akka.testkit.{ImplicitSender, TestKit}
-import org.junit.runner.RunWith
-import org.scalatest.junit.JUnitRunner
-import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
-
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
-import org.apache.flink.runtime.akka.AkkaUtils
-import org.apache.flink.runtime.jobgraph.{JobVertex, JobGraph}
+import org.apache.flink.api.common.{ExecutionConfig, ExecutionConfigTest}
+import org.apache.flink.runtime.akka.{AkkaUtils, ListeningBehaviour}
+import org.apache.flink.runtime.jobgraph.{JobGraph, JobVertex}
 import org.apache.flink.runtime.jobmanager.Tasks.{BlockingNoOpInvokable, NoOpInvokable}
 import org.apache.flink.runtime.messages.JobManagerMessages._
+import org.apache.flink.runtime.messages.Messages.Acknowledge
+import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.NotifyWhenAtLeastNumTaskManagerAreRegistered
 import org.apache.flink.runtime.testingUtils.TestingMessages.DisableDisconnect
 import org.apache.flink.runtime.testingUtils.TestingTaskManagerMessages.{JobManagerTerminated, NotifyWhenJobManagerTerminated}
 import org.apache.flink.runtime.testingUtils.{ScalaTestingUtils, TestingUtils}
 import org.apache.flink.test.util.ForkableFlinkMiniCluster
+import org.junit.runner.RunWith
+import org.scalatest.junit.JUnitRunner
+import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 
 @RunWith(classOf[JUnitRunner])
 class JobManagerFailsITCase(_system: ActorSystem)
@@ -56,29 +57,32 @@ class JobManagerFailsITCase(_system: ActorSystem)
       val num_slots = 13
       val cluster = startDeathwatchCluster(num_slots, 1)
 
-      val tm = cluster.getTaskManagers(0)
-      val jmGateway = cluster.getJobManagerGateway
+      try {
+        val tm = cluster.getTaskManagers(0)
+        val jmGateway = cluster.getLeaderGateway(TestingUtils.TESTING_DURATION)
 
-      // disable disconnect message to test death watch
-      tm ! DisableDisconnect
+        // disable disconnect message to test death watch
+        tm ! DisableDisconnect
 
-      try{
-        jmGateway.tell(RequestNumberRegisteredTaskManager, self)
-        expectMsg(1)
+        within(TestingUtils.TESTING_DURATION) {
+          jmGateway.tell(RequestNumberRegisteredTaskManager, self)
+          expectMsg(1)
 
-        tm ! NotifyWhenJobManagerTerminated(jmGateway.actor)
+          tm ! NotifyWhenJobManagerTerminated(jmGateway.actor)
 
-        jmGateway.tell(PoisonPill, self)
+          jmGateway.tell(PoisonPill, self)
 
-        expectMsgClass(classOf[JobManagerTerminated])
+          expectMsgClass(classOf[JobManagerTerminated])
 
-        cluster.restartJobManager()
+          cluster.restartLeadingJobManager()
 
-        cluster.waitForTaskManagersToBeRegistered()
+          cluster.waitForTaskManagersToBeRegistered()
 
-        cluster.getJobManagerGateway.tell(RequestNumberRegisteredTaskManager, self)
+          cluster.getLeaderGateway(TestingUtils.TESTING_DURATION)
+            .tell(RequestNumberRegisteredTaskManager, self)
 
-        expectMsg(1)
+          expectMsg(1)
+        }
       } finally {
         cluster.stop()
       }
@@ -99,13 +103,13 @@ class JobManagerFailsITCase(_system: ActorSystem)
 
       val cluster = startDeathwatchCluster(num_slots / 2, 2)
 
-      var jmGateway = cluster.getJobManagerGateway
-      val tm = cluster.getTaskManagers(0)
-
       try {
+        var jmGateway = cluster.getLeaderGateway(TestingUtils.TESTING_DURATION)
+        val tm = cluster.getTaskManagers(0)
+
         within(TestingUtils.TESTING_DURATION) {
-          jmGateway.tell(SubmitJob(jobGraph, false), self)
-          expectMsg(Success(jobGraph.getJobID))
+          jmGateway.tell(SubmitJob(jobGraph, ListeningBehaviour.DETACHED), self)
+          expectMsg(JobSubmitSuccess(jobGraph.getJobID))
 
           tm.tell(NotifyWhenJobManagerTerminated(jmGateway.actor()), self)
 
@@ -113,15 +117,18 @@ class JobManagerFailsITCase(_system: ActorSystem)
 
           expectMsgClass(classOf[JobManagerTerminated])
 
-          cluster.restartJobManager()
+          cluster.restartLeadingJobManager()
 
-          jmGateway = cluster.getJobManagerGateway
+          jmGateway = cluster.getLeaderGateway(TestingUtils.TESTING_DURATION)
 
-          cluster.waitForTaskManagersToBeRegistered()
+          // Ask the job manager for the TMs. Don't ask the TMs, because they
+          // can still have state associated with the old job manager.
+          jmGateway.tell(NotifyWhenAtLeastNumTaskManagerAreRegistered(2), self)
+          expectMsg(Acknowledge)
 
-          jmGateway.tell(SubmitJob(jobGraph2, false), self)
+          jmGateway.tell(SubmitJob(jobGraph2, ListeningBehaviour.EXECUTION_RESULT), self)
 
-          val failure = expectMsgType[Success]
+          expectMsg(JobSubmitSuccess(jobGraph2.getJobID()))
 
           val result = expectMsgType[JobResultSuccess]
 
@@ -136,8 +143,12 @@ class JobManagerFailsITCase(_system: ActorSystem)
   def startDeathwatchCluster(numSlots: Int, numTaskmanagers: Int): ForkableFlinkMiniCluster = {
     val config = new Configuration()
     config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, numSlots)
-    config.setInteger(ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, numTaskmanagers)
+    config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskmanagers)
 
-    new ForkableFlinkMiniCluster(config, singleActorSystem = false)
+    val cluster = new ForkableFlinkMiniCluster(config, singleActorSystem = false)
+
+    cluster.start()
+
+    cluster
   }
 }

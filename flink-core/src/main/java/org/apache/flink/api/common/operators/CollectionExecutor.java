@@ -27,19 +27,28 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.Plan;
+import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.accumulators.AccumulatorHelper;
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.api.common.aggregators.AggregatorWithName;
 import org.apache.flink.api.common.aggregators.ConvergenceCriterion;
+import org.apache.flink.api.common.cache.DistributedCache;
 import org.apache.flink.api.common.functions.IterationRuntimeContext;
 import org.apache.flink.api.common.functions.RichFunction;
 import org.apache.flink.api.common.functions.util.RuntimeUDFContext;
+import org.apache.flink.api.common.io.RichInputFormat;
+import org.apache.flink.api.common.io.RichOutputFormat;
 import org.apache.flink.api.common.operators.base.BulkIterationBase;
 import org.apache.flink.api.common.operators.base.BulkIterationBase.PartialSolutionPlaceHolder;
 import org.apache.flink.api.common.operators.base.DeltaIterationBase;
@@ -49,19 +58,24 @@ import org.apache.flink.api.common.operators.util.TypeComparable;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.CompositeType;
 import org.apache.flink.api.common.typeutils.TypeComparator;
+import org.apache.flink.core.fs.Path;
+import org.apache.flink.core.fs.local.LocalFileSystem;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.types.Value;
 import org.apache.flink.util.Visitor;
 
 /**
  * Execution utility for serial, local, collection-based executions of Flink programs.
  */
+@Internal
 public class CollectionExecutor {
-	
-	private static final boolean DEFAULT_MUTABLE_OBJECT_SAFE_MODE = true;
 	
 	private final Map<Operator<?>, List<?>> intermediateResults;
 	
 	private final Map<String, Accumulator<?, ?>> accumulators;
+
+	private final Map<String, Future<Path>> cachedFiles;
 	
 	private final Map<String, Value> previousAggregates;
 	
@@ -82,7 +96,7 @@ public class CollectionExecutor {
 		this.accumulators = new HashMap<String, Accumulator<?,?>>();
 		this.previousAggregates = new HashMap<String, Value>();
 		this.aggregators = new HashMap<String, Aggregator<?>>();
-		
+		this.cachedFiles = new HashMap<String, Future<Path>>();
 		this.classLoader = getClass().getClassLoader();
 	}
 	
@@ -92,7 +106,8 @@ public class CollectionExecutor {
 	
 	public JobExecutionResult execute(Plan program) throws Exception {
 		long startTime = System.currentTimeMillis();
-		
+
+		initCache(program.getCachedFiles());
 		Collection<? extends GenericDataSinkBase<?>> sinks = program.getDataSinks();
 		for (Operator<?> sink : sinks) {
 			execute(sink);
@@ -102,7 +117,14 @@ public class CollectionExecutor {
 		Map<String, Object> accumulatorResults = AccumulatorHelper.toResultMap(accumulators);
 		return new JobExecutionResult(null, endTime - startTime, accumulatorResults);
 	}
-	
+
+	private void initCache(Set<Map.Entry<String, DistributedCache.DistributedCacheEntry>> files){
+		for(Map.Entry<String, DistributedCache.DistributedCacheEntry> file: files){
+			Future<Path> doNothing = new CompletedFuture(new Path(file.getValue().filePath));
+			cachedFiles.put(file.getKey(), doNothing);
+		}
+	};
+
 	private List<?> execute(Operator<?> operator) throws Exception {
 		return execute(operator, 0);
 	}
@@ -128,10 +150,10 @@ public class CollectionExecutor {
 			result = executeBinaryOperator((DualInputOperator<?, ?, ?, ?>) operator, superStep);
 		}
 		else if (operator instanceof GenericDataSourceBase) {
-			result = executeDataSource((GenericDataSourceBase<?, ?>) operator);
+			result = executeDataSource((GenericDataSourceBase<?, ?>) operator, superStep);
 		}
 		else if (operator instanceof GenericDataSinkBase) {
-			executeDataSink((GenericDataSinkBase<?>) operator);
+			executeDataSink((GenericDataSinkBase<?>) operator, superStep);
 			result = Collections.emptyList();
 		}
 		else {
@@ -148,7 +170,7 @@ public class CollectionExecutor {
 	//  Operator class specific execution methods
 	// --------------------------------------------------------------------------------------------
 	
-	private <IN> void executeDataSink(GenericDataSinkBase<?> sink) throws Exception {
+	private <IN> void executeDataSink(GenericDataSinkBase<?> sink, int superStep) throws Exception {
 		Operator<?> inputOp = sink.getInput();
 		if (inputOp == null) {
 			throw new InvalidProgramException("The data sink " + sink.getName() + " has no input.");
@@ -160,13 +182,39 @@ public class CollectionExecutor {
 		@SuppressWarnings("unchecked")
 		GenericDataSinkBase<IN> typedSink = (GenericDataSinkBase<IN>) sink;
 
-		typedSink.executeOnCollections(input, executionConfig);
+		// build the runtime context and compute broadcast variables, if necessary
+		TaskInfo taskInfo = new TaskInfo(typedSink.getName(), 0, 1, 0);
+		RuntimeUDFContext ctx;
+
+		MetricGroup metrics = new UnregisteredMetricsGroup();
+			
+		if (RichOutputFormat.class.isAssignableFrom(typedSink.getUserCodeWrapper().getUserCodeClass())) {
+			ctx = superStep == 0 ? new RuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics) :
+					new IterationRuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics);
+		} else {
+			ctx = null;
+		}
+
+		typedSink.executeOnCollections(input, ctx, executionConfig);
 	}
 	
-	private <OUT> List<OUT> executeDataSource(GenericDataSourceBase<?, ?> source) throws Exception {
+	private <OUT> List<OUT> executeDataSource(GenericDataSourceBase<?, ?> source, int superStep)
+			throws Exception {
 		@SuppressWarnings("unchecked")
 		GenericDataSourceBase<OUT, ?> typedSource = (GenericDataSourceBase<OUT, ?>) source;
-		return typedSource.executeOnCollections(executionConfig);
+		// build the runtime context and compute broadcast variables, if necessary
+		TaskInfo taskInfo = new TaskInfo(typedSource.getName(), 0, 1, 0);
+		
+		RuntimeUDFContext ctx;
+
+		MetricGroup metrics = new UnregisteredMetricsGroup();
+		if (RichInputFormat.class.isAssignableFrom(typedSource.getUserCodeWrapper().getUserCodeClass())) {
+			ctx = superStep == 0 ? new RuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics) :
+					new IterationRuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics);
+		} else {
+			ctx = null;
+		}
+		return typedSource.executeOnCollections(ctx, executionConfig);
 	}
 	
 	private <IN, OUT> List<OUT> executeUnaryOperator(SingleInputOperator<?, ?, ?> operator, int superStep) throws Exception {
@@ -182,10 +230,13 @@ public class CollectionExecutor {
 		SingleInputOperator<IN, OUT, ?> typedOp = (SingleInputOperator<IN, OUT, ?>) operator;
 		
 		// build the runtime context and compute broadcast variables, if necessary
+		TaskInfo taskInfo = new TaskInfo(typedOp.getName(), 0, 1, 0);
 		RuntimeUDFContext ctx;
+
+		MetricGroup metrics = new UnregisteredMetricsGroup();
 		if (RichFunction.class.isAssignableFrom(typedOp.getUserCodeWrapper().getUserCodeClass())) {
-			ctx = superStep == 0 ? new RuntimeUDFContext(operator.getName(), 1, 0, getClass().getClassLoader(), executionConfig, accumulators) :
-					new IterationRuntimeUDFContext(operator.getName(), 1, 0, classLoader, executionConfig, accumulators);
+			ctx = superStep == 0 ? new RuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics) :
+					new IterationRuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics);
 			
 			for (Map.Entry<String, Operator<?>> bcInputs : operator.getBroadcastInputs().entrySet()) {
 				List<?> bcData = execute(bcInputs.getValue());
@@ -194,10 +245,8 @@ public class CollectionExecutor {
 		} else {
 			ctx = null;
 		}
-		
-		List<OUT> result = typedOp.executeOnCollections(inputData, ctx, executionConfig);
-		
-		return result;
+
+		return typedOp.executeOnCollections(inputData, ctx, executionConfig);
 	}
 	
 	private <IN1, IN2, OUT> List<OUT> executeBinaryOperator(DualInputOperator<?, ?, ?, ?> operator, int superStep) throws Exception {
@@ -221,10 +270,14 @@ public class CollectionExecutor {
 		DualInputOperator<IN1, IN2, OUT, ?> typedOp = (DualInputOperator<IN1, IN2, OUT, ?>) operator;
 		
 		// build the runtime context and compute broadcast variables, if necessary
+		TaskInfo taskInfo = new TaskInfo(typedOp.getName(), 0, 1, 0);
 		RuntimeUDFContext ctx;
+
+		MetricGroup metrics = new UnregisteredMetricsGroup();
+	
 		if (RichFunction.class.isAssignableFrom(typedOp.getUserCodeWrapper().getUserCodeClass())) {
-			ctx = superStep == 0 ? new RuntimeUDFContext(operator.getName(), 1, 0, classLoader, executionConfig, accumulators) :
-				new IterationRuntimeUDFContext(operator.getName(), 1, 0, classLoader, executionConfig, accumulators);
+			ctx = superStep == 0 ? new RuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics) :
+				new IterationRuntimeUDFContext(taskInfo, classLoader, executionConfig, cachedFiles, accumulators, metrics);
 			
 			for (Map.Entry<String, Operator<?>> bcInputs : operator.getBroadcastInputs().entrySet()) {
 				List<?> bcData = execute(bcInputs.getValue());
@@ -233,10 +286,8 @@ public class CollectionExecutor {
 		} else {
 			ctx = null;
 		}
-		
-		List<OUT> result = typedOp.executeOnCollections(inputData1, inputData2, ctx, executionConfig);
-		
-		return result;
+
+		return typedOp.executeOnCollections(inputData1, inputData2, ctx, executionConfig);
 	}
 	
 	@SuppressWarnings("unchecked")
@@ -385,7 +436,7 @@ public class CollectionExecutor {
 				solutionMap.put(wrapper, delta);
 			}
 
-			currentWorkset = (List<?>) execute(iteration.getNextWorkset(), superstep);
+			currentWorkset = execute(iteration.getNextWorkset(), superstep);
 
 			if (currentWorkset.isEmpty()) {
 				break;
@@ -479,9 +530,10 @@ public class CollectionExecutor {
 	
 	private class IterationRuntimeUDFContext extends RuntimeUDFContext implements IterationRuntimeContext {
 
-		public IterationRuntimeUDFContext(String name, int numParallelSubtasks, int subtaskIndex, ClassLoader classloader,
-										ExecutionConfig executionConfig, Map<String, Accumulator<?,?>> accumulators) {
-			super(name, numParallelSubtasks, subtaskIndex, classloader, executionConfig, accumulators);
+		public IterationRuntimeUDFContext(TaskInfo taskInfo, ClassLoader classloader, ExecutionConfig executionConfig,
+											Map<String, Future<Path>> cpTasks, Map<String, Accumulator<?, ?>> accumulators,
+											MetricGroup metrics) {
+			super(taskInfo, classloader, executionConfig, cpTasks, accumulators, metrics);
 		}
 
 		@Override
@@ -499,6 +551,45 @@ public class CollectionExecutor {
 		@Override
 		public <T extends Value> T getPreviousIterationAggregate(String name) {
 			return (T) previousAggregates.get(name);
+		}
+	}
+
+	private static final class CompletedFuture implements Future<Path>{
+
+		private final Path result;
+
+		public CompletedFuture(Path entry) {
+			try{
+				LocalFileSystem fs = (LocalFileSystem) entry.getFileSystem();
+				result = entry.isAbsolute() ? new Path(entry.toUri().getPath()): new Path(fs.getWorkingDirectory(),entry);
+			} catch (Exception e){
+				throw new RuntimeException("DistributedCache supports only local files for Collection Environments");
+			}
+		}
+
+		@Override
+		public boolean cancel(boolean mayInterruptIfRunning) {
+			return false;
+		}
+
+		@Override
+		public boolean isCancelled() {
+			return false;
+		}
+
+		@Override
+		public boolean isDone() {
+			return true;
+		}
+
+		@Override
+		public Path get() throws InterruptedException, ExecutionException {
+			return result;
+		}
+
+		@Override
+		public Path get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+			return get();
 		}
 	}
 }

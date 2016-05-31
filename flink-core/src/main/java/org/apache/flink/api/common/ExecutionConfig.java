@@ -19,12 +19,17 @@
 package org.apache.flink.api.common;
 
 import com.esotericsoftware.kryo.Serializer;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.annotation.Public;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+
 
 import java.io.Serializable;
-import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * A config to define the behavior of the program execution. It allows to define (among other
@@ -34,6 +39,7 @@ import java.util.Map;
  *     <li>The default parallelism of the program, i.e., how many parallel tasks to use for
  *         all functions that do not define a specific value directly.</li>
  *     <li>The number of retries in the case of failed executions.</li>
+ *     <li>The delay between delay between execution retries.</li>
  *     <li>The {@link ExecutionMode} of the program: Batch or Pipelined.
  *         The default execution mode is {@link ExecutionMode#PIPELINED}</li>
  *     <li>Enabling or disabling the "closure cleaner". The closure cleaner pre-processes
@@ -50,18 +56,31 @@ import java.util.Map;
  *         automatically applied.</li>
  * </ul>
  */
+@Public
 public class ExecutionConfig implements Serializable {
 
 	private static final long serialVersionUID = 1L;
 
-	// Key for storing it in the Job Configuration
-	public static final String CONFIG_KEY = "runtime.config";
-
 	/**
 	 * The constant to use for the parallelism, if the system should use the number
-	 *  of currently available slots.
+	 * of currently available slots.
 	 */
 	public static final int PARALLELISM_AUTO_MAX = Integer.MAX_VALUE;
+
+	/**
+	 * The flag value indicating use of the default parallelism. This value can
+	 * be used to reset the parallelism back to the default state.
+	 */
+	public static final int PARALLELISM_DEFAULT = -1;
+
+	/**
+	 * The flag value indicating an unknown or unset parallelism. This value is
+	 * not a valid parallelism and indicates that the parallelism should remain
+	 * unchanged.
+	 */
+	public static final int PARALLELISM_UNKNOWN = -2;
+
+	private static final long DEFAULT_RESTART_DELAY = 10000L;
 
 	// --------------------------------------------------------------------------------------------
 
@@ -70,15 +89,19 @@ public class ExecutionConfig implements Serializable {
 
 	private boolean useClosureCleaner = true;
 
-	private int parallelism = -1;
+	private int parallelism = PARALLELISM_DEFAULT;
 
+	/**
+	 * @deprecated Should no longer be used because it is subsumed by RestartStrategyConfiguration
+	 */
+	@Deprecated
 	private int numberOfExecutionRetries = -1;
 
 	private boolean forceKryo = false;
 
 	private boolean objectReuse = false;
 
-	private boolean disableAutoTypeRegistration = false;
+	private boolean autoTypeRegistrationEnabled = true;
 
 	private boolean forceAvro = false;
 
@@ -87,30 +110,36 @@ public class ExecutionConfig implements Serializable {
 	/** If set to true, progress updates are printed to System.out during execution */
 	private boolean printProgressDuringExecution = true;
 
-	private GlobalJobParameters globalJobParameters = null;
-
 	private long autoWatermarkInterval = 0;
 
-	private boolean timestampsEnabled = false;
+	/**
+	 * @deprecated Should no longer be used because it is subsumed by RestartStrategyConfiguration
+	 */
+	@Deprecated
+	private long executionRetryDelay = DEFAULT_RESTART_DELAY;
+
+	private RestartStrategies.RestartStrategyConfiguration restartStrategyConfiguration;
+	
+	private long taskCancellationIntervalMillis = -1;
+
+	// ------------------------------- User code values --------------------------------------------
+
+	private GlobalJobParameters globalJobParameters;
 
 	// Serializers and types registered with Kryo and the PojoSerializer
-	// we store them in lists to ensure they are registered in order in all kryo instances.
+	// we store them in linked maps/sets to ensure they are registered in order in all kryo instances.
 
-	private final List<Entry<Class<?>, Serializer<?>>> registeredTypesWithKryoSerializers =
-			new ArrayList<Entry<Class<?>, Serializer<?>>>();
+	private LinkedHashMap<Class<?>, SerializableSerializer<?>> registeredTypesWithKryoSerializers = new LinkedHashMap<>();
 
-	private final List<Entry<Class<?>, Class<? extends Serializer<?>>>> registeredTypesWithKryoSerializerClasses =
-			new ArrayList<Entry<Class<?>, Class<? extends Serializer<?>>>>();
+	private LinkedHashMap<Class<?>, Class<? extends Serializer<?>>> registeredTypesWithKryoSerializerClasses = new LinkedHashMap<>();
 
-	private final List<Entry<Class<?>, Serializer<?>>> defaultKryoSerializers =
-			new ArrayList<Entry<Class<?>, Serializer<?>>>();
+	private LinkedHashMap<Class<?>, SerializableSerializer<?>> defaultKryoSerializers = new LinkedHashMap<>();
 
-	private final List<Entry<Class<?>, Class<? extends Serializer<?>>>> defaultKryoSerializerClasses =
-			new ArrayList<Entry<Class<?>, Class<? extends Serializer<?>>>>();
+	private LinkedHashMap<Class<?>, Class<? extends Serializer<?>>> defaultKryoSerializerClasses = new LinkedHashMap<>();
 
-	private final LinkedHashSet<Class<?>> registeredKryoTypes = new LinkedHashSet<Class<?>>();
+	private LinkedHashSet<Class<?>> registeredKryoTypes = new LinkedHashSet<>();
 
-	private final LinkedHashSet<Class<?>> registeredPojoTypes = new LinkedHashSet<Class<?>>();
+	private LinkedHashSet<Class<?>> registeredPojoTypes = new LinkedHashSet<>();
 
 	// --------------------------------------------------------------------------------------------
 
@@ -151,44 +180,10 @@ public class ExecutionConfig implements Serializable {
 	 *
 	 * @param interval The interval between watermarks in milliseconds.
 	 */
+	@PublicEvolving
 	public ExecutionConfig setAutoWatermarkInterval(long interval) {
 		this.autoWatermarkInterval = interval;
 		return this;
-	}
-
-	/**
-	 * Enables streaming timestamps. When this is enabled all records that are emitted
-	 * from a source have a timestamp attached. This is required if a topology contains
-	 * operations that rely on watermarks and timestamps to perform operations, such as
-	 * event-time windows.
-	 *
-	 * <p>
-	 * This is automatically enabled if you enable automatic watermarks.
-	 *
-	 * @see #setAutoWatermarkInterval(long)
-	 */
-	public ExecutionConfig enableTimestamps() {
-		this.timestampsEnabled = true;
-		return this;
-	}
-
-	/**
-	 * Disables streaming timestamps.
-	 *
-	 * @see #enableTimestamps()
-	 */
-	public ExecutionConfig disableTimestamps() {
-		this.timestampsEnabled = false;
-		return this;
-	}
-
-	/**
-	 * Returns true when timestamps are enabled.
-	 *
-	 * @see #enableTimestamps()
-	 */
-	public boolean areTimestampsEnabled() {
-		return timestampsEnabled;
 	}
 
 	/**
@@ -196,6 +191,7 @@ public class ExecutionConfig implements Serializable {
 	 *
 	 * @see #setAutoWatermarkInterval(long)
 	 */
+	@PublicEvolving
 	public long getAutoWatermarkInterval()  {
 		return this.autoWatermarkInterval;
 	}
@@ -209,24 +205,8 @@ public class ExecutionConfig implements Serializable {
 	 * with a parallelism of one (the final reduce to the single result value).
 	 *
 	 * @return The parallelism used by operations, unless they override that value. This method
-	 *         returns {@code -1}, if the environment's default parallelism should be used.
-	 * @deprecated Please use {@link #getParallelism}
-	 */
-	@Deprecated
-	public int getDegreeOfParallelism() {
-		return getParallelism();
-	}
-
-	/**
-	 * Gets the parallelism with which operation are executed by default. Operations can
-	 * individually override this value to use a specific parallelism.
-	 *
-	 * Other operations may need to run with a different parallelism - for example calling
-	 * a reduce operation over the entire data set will involve an operation that runs
-	 * with a parallelism of one (the final reduce to the single result value).
-	 *
-	 * @return The parallelism used by operations, unless they override that value. This method
-	 *         returns {@code -1}, if the environment's default parallelism should be used.
+	 *         returns {@link #PARALLELISM_DEFAULT} if the environment's default parallelism
+	 *         should be used.
 	 */
 	public int getParallelism() {
 		return parallelism;
@@ -243,32 +223,72 @@ public class ExecutionConfig implements Serializable {
 	 * from a JAR file, the default parallelism is the one configured for that setup.
 	 *
 	 * @param parallelism The parallelism to use
-	 * @deprecated Please use {@link #setParallelism}
 	 */
-	@Deprecated
-	public ExecutionConfig setDegreeOfParallelism(int parallelism) {
-		return setParallelism(parallelism);
+	public ExecutionConfig setParallelism(int parallelism) {
+		if (parallelism != PARALLELISM_UNKNOWN) {
+			if (parallelism < 1 && parallelism != PARALLELISM_DEFAULT) {
+				throw new IllegalArgumentException(
+					"Parallelism must be at least one, or ExecutionConfig.PARALLELISM_DEFAULT (use system default).");
+			}
+			this.parallelism = parallelism;
+		}
+		return this;
 	}
 
 	/**
-	 * Sets the parallelism for operations executed through this environment.
-	 * Setting a parallelism of x here will cause all operators (such as join, map, reduce) to run with
-	 * x parallel instances.
-	 * <p>
-	 * This method overrides the default parallelism for this environment.
-	 * The local execution environment uses by default a value equal to the number of hardware
-	 * contexts (CPU cores / threads). When executing the program via the command line client
-	 * from a JAR file, the default parallelism is the one configured for that setup.
-	 *
-	 * @param parallelism The parallelism to use
+	 * Gets the interval (in milliseconds) between consecutive attempts to cancel a running task.
 	 */
-	public ExecutionConfig setParallelism(int parallelism) {
-		if (parallelism < 1 && parallelism != -1) {
-			throw new IllegalArgumentException(
-					"Parallelism must be at least one, or -1 (use system default).");
-		}
-		this.parallelism = parallelism;
+	public long getTaskCancellationInterval() {
+		return this.taskCancellationIntervalMillis;
+	}
+
+	/**
+	 * Sets the configuration parameter specifying the interval (in milliseconds)
+	 * between consecutive attempts to cancel a running task.
+	 * @param interval the interval (in milliseconds).
+	 */
+	public ExecutionConfig setTaskCancellationInterval(long interval) {
+		this.taskCancellationIntervalMillis = interval;
 		return this;
+	}
+
+	/**
+	 * Sets the restart strategy to be used for recovery.
+	 *
+	 * <pre>{@code
+	 * ExecutionConfig config = env.getConfig();
+	 *
+	 * config.setRestartStrategy(RestartStrategies.fixedDelayRestart(
+	 * 	10,  // number of retries
+	 * 	1000 // delay between retries));
+	 * }</pre>
+	 *
+	 * @param restartStrategyConfiguration Configuration defining the restart strategy to use
+	 */
+	@PublicEvolving
+	public void setRestartStrategy(RestartStrategies.RestartStrategyConfiguration restartStrategyConfiguration) {
+		this.restartStrategyConfiguration = restartStrategyConfiguration;
+	}
+
+	/**
+	 * Returns the restart strategy which has been set for the current job.
+	 *
+	 * @return The specified restart configuration
+	 */
+	@PublicEvolving
+	public RestartStrategies.RestartStrategyConfiguration getRestartStrategy() {
+		if (restartStrategyConfiguration == null) {
+			// support the old API calls by creating a restart strategy from them
+			if (getNumberOfExecutionRetries() > 0 && getExecutionRetryDelay() >= 0) {
+				return RestartStrategies.fixedDelayRestart(getNumberOfExecutionRetries(), getExecutionRetryDelay());
+			} else if (getNumberOfExecutionRetries() == 0) {
+				return RestartStrategies.noRestart();
+			} else {
+				return null;
+			}
+		} else {
+			return restartStrategyConfiguration;
+		}
 	}
 
 	/**
@@ -277,9 +297,24 @@ public class ExecutionConfig implements Serializable {
 	 * should be used.
 	 *
 	 * @return The number of times the system will try to re-execute failed tasks.
+	 *
+	 * @deprecated Should no longer be used because it is subsumed by RestartStrategyConfiguration
 	 */
+	@Deprecated
 	public int getNumberOfExecutionRetries() {
 		return numberOfExecutionRetries;
+	}
+
+	/**
+	 * Returns the delay between execution retries.
+	 *
+	 * @return The delay between successive execution retries in milliseconds.
+	 *
+	 * @deprecated Should no longer be used because it is subsumed by RestartStrategyConfiguration
+	 */
+	@Deprecated
+	public long getExecutionRetryDelay() {
+		return executionRetryDelay;
 	}
 
 	/**
@@ -288,13 +323,41 @@ public class ExecutionConfig implements Serializable {
 	 * default value (as defined in the configuration) should be used.
 	 *
 	 * @param numberOfExecutionRetries The number of times the system will try to re-execute failed tasks.
+	 *
+	 * @return The current execution configuration
+	 *
+	 * @deprecated This method will be replaced by {@link #setRestartStrategy}. The
+	 * {@link RestartStrategies.FixedDelayRestartStrategyConfiguration} contains the number of
+	 * execution retries.
 	 */
+	@Deprecated
 	public ExecutionConfig setNumberOfExecutionRetries(int numberOfExecutionRetries) {
 		if (numberOfExecutionRetries < -1) {
 			throw new IllegalArgumentException(
-					"The number of execution retries must be non-negative, or -1 (use system default)");
+				"The number of execution retries must be non-negative, or -1 (use system default)");
 		}
 		this.numberOfExecutionRetries = numberOfExecutionRetries;
+		return this;
+	}
+
+	/**
+	 * Sets the delay between executions.
+	 *
+	 * @param executionRetryDelay The number of milliseconds the system will wait to retry.
+	 *
+	 * @return The current execution configuration
+	 *
+	 * @deprecated This method will be replaced by {@link #setRestartStrategy}. The
+	 * {@link RestartStrategies.FixedDelayRestartStrategyConfiguration} contains the delay between
+	 * successive execution attempts.
+	 */
+	@Deprecated
+	public ExecutionConfig setExecutionRetryDelay(long executionRetryDelay) {
+		if (executionRetryDelay < 0 ) {
+			throw new IllegalArgumentException(
+				"The delay between retries must be non-negative.");
+		}
+		this.executionRetryDelay = executionRetryDelay;
 		return this;
 	}
 
@@ -392,6 +455,7 @@ public class ExecutionConfig implements Serializable {
 	 * 
 	 * @param codeAnalysisMode see {@link CodeAnalysisMode}
 	 */
+	@PublicEvolving
 	public void setCodeAnalysisMode(CodeAnalysisMode codeAnalysisMode) {
 		this.codeAnalysisMode = codeAnalysisMode;
 	}
@@ -399,6 +463,7 @@ public class ExecutionConfig implements Serializable {
 	/**
 	 * Returns the {@link CodeAnalysisMode} of the program.
 	 */
+	@PublicEvolving
 	public CodeAnalysisMode getCodeAnalysisMode() {
 		return codeAnalysisMode;
 	}
@@ -457,19 +522,12 @@ public class ExecutionConfig implements Serializable {
 	 * @param type The class of the types serialized with the given serializer.
 	 * @param serializer The serializer to use.
 	 */
-	public void addDefaultKryoSerializer(Class<?> type, Serializer<?> serializer) {
+	public <T extends Serializer<?> & Serializable>void addDefaultKryoSerializer(Class<?> type, T serializer) {
 		if (type == null || serializer == null) {
 			throw new NullPointerException("Cannot register null class or serializer.");
 		}
-		if (!(serializer instanceof java.io.Serializable)) {
-			throw new IllegalArgumentException("The serializer instance must be serializable, (for distributing it in the cluster), "
-					+ "as defined by java.io.Serializable. For stateless serializers, you can use the "
-					+ "'registerSerializer(Class, Class)' method to register the serializer via its class.");
-		}
-		Entry<Class<?>, Serializer<?>> e = new Entry<Class<?>, Serializer<?>>(type, serializer);
-		if(!defaultKryoSerializers.contains(e)) {
-			defaultKryoSerializers.add(e);
-		}
+
+		defaultKryoSerializers.put(type, new SerializableSerializer<>(serializer));
 	}
 
 	/**
@@ -482,10 +540,7 @@ public class ExecutionConfig implements Serializable {
 		if (type == null || serializerClass == null) {
 			throw new NullPointerException("Cannot register null class or serializer.");
 		}
-		Entry<Class<?>, Class<? extends Serializer<?>>> e = new Entry<Class<?>, Class<? extends Serializer<?>>>(type, serializerClass);
-		if(!defaultKryoSerializerClasses.contains(e)) {
-			defaultKryoSerializerClasses.add(e);
-		}
+		defaultKryoSerializerClasses.put(type, serializerClass);
 	}
 
 	/**
@@ -497,19 +552,12 @@ public class ExecutionConfig implements Serializable {
 	 * @param type The class of the types serialized with the given serializer.
 	 * @param serializer The serializer to use.
 	 */
-	public void registerTypeWithKryoSerializer(Class<?> type, Serializer<?> serializer) {
+	public <T extends Serializer<?> & Serializable>void registerTypeWithKryoSerializer(Class<?> type, T serializer) {
 		if (type == null || serializer == null) {
 			throw new NullPointerException("Cannot register null class or serializer.");
 		}
-		if (!(serializer instanceof java.io.Serializable)) {
-			throw new IllegalArgumentException("The serializer instance must be serializable, (for distributing it in the cluster), "
-					+ "as defined by java.io.Serializable. For stateless serializers, you can use the "
-					+ "'registerSerializer(Class, Class)' method to register the serializer via its class.");
-		}
-		Entry<Class<?>, Serializer<?>> e = new Entry<Class<?>, Serializer<?>>(type, serializer);
-		if(!registeredTypesWithKryoSerializers.contains(e)) {
-			registeredTypesWithKryoSerializers.add(e);
-		}
+
+		registeredTypesWithKryoSerializers.put(type, new SerializableSerializer<>(serializer));
 	}
 
 	/**
@@ -522,10 +570,7 @@ public class ExecutionConfig implements Serializable {
 		if (type == null || serializerClass == null) {
 			throw new NullPointerException("Cannot register null class or serializer.");
 		}
-		Entry<Class<?>, Class<? extends Serializer<?>>> e = new Entry<Class<?>, Class<? extends Serializer<?>>>(type, serializerClass);
-		if(!registeredTypesWithKryoSerializerClasses.contains(e)) {
-			registeredTypesWithKryoSerializerClasses.add(e);
-		}
+		registeredTypesWithKryoSerializerClasses.put(type, serializerClass);
 	}
 
 	/**
@@ -563,14 +608,14 @@ public class ExecutionConfig implements Serializable {
 	/**
 	 * Returns the registered types with Kryo Serializers.
 	 */
-	public List<Entry<Class<?>, Serializer<?>>> getRegisteredTypesWithKryoSerializers() {
+	public LinkedHashMap<Class<?>, SerializableSerializer<?>> getRegisteredTypesWithKryoSerializers() {
 		return registeredTypesWithKryoSerializers;
 	}
 
 	/**
 	 * Returns the registered types with their Kryo Serializer classes.
 	 */
-	public List<Entry<Class<?>, Class<? extends Serializer<?>>>> getRegisteredTypesWithKryoSerializerClasses() {
+	public LinkedHashMap<Class<?>, Class<? extends Serializer<?>>> getRegisteredTypesWithKryoSerializerClasses() {
 		return registeredTypesWithKryoSerializerClasses;
 	}
 
@@ -578,14 +623,14 @@ public class ExecutionConfig implements Serializable {
 	/**
 	 * Returns the registered default Kryo Serializers.
 	 */
-	public List<Entry<Class<?>, Serializer<?>>> getDefaultKryoSerializers() {
+	public LinkedHashMap<Class<?>, SerializableSerializer<?>> getDefaultKryoSerializers() {
 		return defaultKryoSerializers;
 	}
 
 	/**
 	 * Returns the registered default Kryo Serializer classes.
 	 */
-	public List<Entry<Class<?>, Class<? extends Serializer<?>>>> getDefaultKryoSerializerClasses() {
+	public LinkedHashMap<Class<?>, Class<? extends Serializer<?>>> getDefaultKryoSerializerClasses() {
 		return defaultKryoSerializerClasses;
 	}
 
@@ -596,7 +641,7 @@ public class ExecutionConfig implements Serializable {
 		if (isForceKryoEnabled()) {
 			// if we force kryo, we must also return all the types that
 			// were previously only registered as POJO
-			LinkedHashSet<Class<?>> result = new LinkedHashSet<Class<?>>();
+			LinkedHashSet<Class<?>> result = new LinkedHashSet<>();
 			result.addAll(registeredKryoTypes);
 			for(Class<?> t : registeredPojoTypes) {
 				if (!result.contains(t)) {
@@ -618,7 +663,7 @@ public class ExecutionConfig implements Serializable {
 
 
 	public boolean isAutoTypeRegistrationDisabled() {
-		return disableAutoTypeRegistration;
+		return !autoTypeRegistrationEnabled;
 	}
 
 	/**
@@ -627,66 +672,79 @@ public class ExecutionConfig implements Serializable {
 	 *
 	 */
 	public void disableAutoTypeRegistration() {
-		this.disableAutoTypeRegistration = false;
+		this.autoTypeRegistrationEnabled = false;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (obj instanceof ExecutionConfig) {
+			ExecutionConfig other = (ExecutionConfig) obj;
+
+			return other.canEqual(this) &&
+				Objects.equals(executionMode, other.executionMode) &&
+				useClosureCleaner == other.useClosureCleaner &&
+				parallelism == other.parallelism &&
+				((restartStrategyConfiguration == null && other.restartStrategyConfiguration == null) ||
+					(null != restartStrategyConfiguration && restartStrategyConfiguration.equals(other.restartStrategyConfiguration))) &&
+				forceKryo == other.forceKryo &&
+				objectReuse == other.objectReuse &&
+				autoTypeRegistrationEnabled == other.autoTypeRegistrationEnabled &&
+				forceAvro == other.forceAvro &&
+				Objects.equals(codeAnalysisMode, other.codeAnalysisMode) &&
+				printProgressDuringExecution == other.printProgressDuringExecution &&
+				Objects.equals(globalJobParameters, other.globalJobParameters) &&
+				autoWatermarkInterval == other.autoWatermarkInterval &&
+				registeredTypesWithKryoSerializerClasses.equals(other.registeredTypesWithKryoSerializerClasses) &&
+				defaultKryoSerializerClasses.equals(other.defaultKryoSerializerClasses) &&
+				registeredKryoTypes.equals(other.registeredKryoTypes) &&
+				registeredPojoTypes.equals(other.registeredPojoTypes) &&
+				taskCancellationIntervalMillis == other.taskCancellationIntervalMillis;
+
+		} else {
+			return false;
+		}
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(
+			executionMode,
+			useClosureCleaner,
+			parallelism,
+			restartStrategyConfiguration,
+			forceKryo,
+			objectReuse,
+			autoTypeRegistrationEnabled,
+			forceAvro,
+			codeAnalysisMode,
+			printProgressDuringExecution,
+			globalJobParameters,
+			autoWatermarkInterval,
+			registeredTypesWithKryoSerializerClasses,
+			defaultKryoSerializerClasses,
+			registeredKryoTypes,
+			registeredPojoTypes,
+			taskCancellationIntervalMillis);
+	}
+
+	public boolean canEqual(Object obj) {
+		return obj instanceof ExecutionConfig;
 	}
 
 
 	// ------------------------------ Utilities  ----------------------------------
 
-	public static class Entry<K, V> implements Serializable {
+	public static class SerializableSerializer<T extends Serializer<?> & Serializable> implements Serializable {
+		private static final long serialVersionUID = 4687893502781067189L;
 
-		private static final long serialVersionUID = 1L;
+		private T serializer;
 
-		private final K k;
-		private final V v;
-
-		public Entry(K k, V v) {
-			this.k = k;
-			this.v = v;
+		public SerializableSerializer(T serializer) {
+			this.serializer = serializer;
 		}
 
-		public K getKey() {
-			return k;
-		}
-
-		public V getValue() {
-			return v;
-		}
-
-		@Override
-		public boolean equals(Object o) {
-			if (this == o) {
-				return true;
-			}
-			if (o == null || getClass() != o.getClass()) {
-				return false;
-			}
-
-			Entry entry = (Entry) o;
-
-			if (k != null ? !k.equals(entry.k) : entry.k != null) {
-				return false;
-			}
-			if (v != null ? !v.equals(entry.v) : entry.v != null) {
-				return false;
-			}
-
-			return true;
-		}
-
-		@Override
-		public int hashCode() {
-			int result = k != null ? k.hashCode() : 0;
-			result = 31 * result + (v != null ? v.hashCode() : 0);
-			return result;
-		}
-
-		@Override
-		public String toString() {
-			return "Entry{" +
-					"k=" + k +
-					", v=" + v +
-					'}';
+		public T getSerializer() {
+			return serializer;
 		}
 	}
 
@@ -694,20 +752,19 @@ public class ExecutionConfig implements Serializable {
 	 * Abstract class for a custom user configuration object registered at the execution config.
 	 *
 	 * This user config is accessible at runtime through
-	 * getRuntimeContext().getExecutionConfig().getUserConfig()
+	 * getRuntimeContext().getExecutionConfig().GlobalJobParameters()
 	 */
 	public static class GlobalJobParameters implements Serializable {
 		private static final long serialVersionUID = 1L;
 
 		/**
-		 * Convert UserConfig into a Map<String, String> representation.
+		 * Convert UserConfig into a {@code Map<String, String>} representation.
 		 * This can be used by the runtime, for example for presenting the user config in the web frontend.
 		 *
-		 * @return Key/Value representation of the UserConfig, or null.
+		 * @return Key/Value representation of the UserConfig
 		 */
 		public Map<String, String> toMap() {
-			return null;
+			return Collections.emptyMap();
 		}
 	}
-
 }

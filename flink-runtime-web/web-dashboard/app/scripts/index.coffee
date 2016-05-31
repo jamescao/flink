@@ -28,23 +28,37 @@ angular.module('flinkApp', ['ui.router', 'angularMoment'])
 
 # --------------------------------------
 
-.constant 'flinkConfig', {
-  jobServer: 'http://localhost:8081'
-  newServer: 'http://localhost:8081'
-#  jobServer: 'http://localhost:3000/new-server'
-#  newServer: 'http://localhost:3000/new-server'
-  refreshInterval: 10000
+.value 'flinkConfig', {
+  jobServer: ''
+# jobServer: 'http://localhost:8081/'
+  "refresh-interval": 10000
 }
 
 # --------------------------------------
 
-.run (JobsService, flinkConfig, $interval) ->
-  JobsService.listJobs()
+.run (JobsService, MainService, flinkConfig, $interval) ->
+  MainService.loadConfig().then (config) ->
+    angular.extend flinkConfig, config
 
-  $interval ->
     JobsService.listJobs()
-  , flinkConfig.refreshInterval
 
+    $interval ->
+      JobsService.listJobs()
+    , flinkConfig["refresh-interval"]
+
+
+# --------------------------------------
+
+.config ($uiViewScrollProvider) ->
+  $uiViewScrollProvider.useAnchorScroll()
+
+# --------------------------------------
+
+.run ($rootScope, $state) ->
+  $rootScope.$on '$stateChangeStart', (event, toState, toParams, fromState) ->
+    if toState.redirectTo
+      event.preventDefault()
+      $state.go toState.redirectTo, toParams
 
 # --------------------------------------
 
@@ -62,7 +76,7 @@ angular.module('flinkApp', ['ui.router', 'angularMoment'])
       main:
         templateUrl: "partials/jobs/running-jobs.html"
         controller: 'RunningJobsController'
-  
+
   .state "completed-jobs",
     url: "/completed-jobs"
     views:
@@ -80,17 +94,46 @@ angular.module('flinkApp', ['ui.router', 'angularMoment'])
 
   .state "single-job.plan",
     url: ""
+    redirectTo: "single-job.plan.subtasks"
     views:
       details:
         templateUrl: "partials/jobs/job.plan.html"
         controller: 'JobPlanController'
 
-  .state "single-job.plan.node",
-    url: "/{nodeid:int}"
+  .state "single-job.plan.subtasks",
+    url: ""
     views:
-      node:
-        templateUrl: "partials/jobs/job.plan.node.html"
-        controller: 'JobPlanNodeController'
+      'node-details':
+        templateUrl: "partials/jobs/job.plan.node-list.subtasks.html"
+        controller: 'JobPlanSubtasksController'
+
+  .state "single-job.plan.taskmanagers",
+    url: "/taskmanagers"
+    views:
+      'node-details':
+        templateUrl: "partials/jobs/job.plan.node-list.taskmanagers.html"
+        controller: 'JobPlanTaskManagersController'
+
+  .state "single-job.plan.accumulators",
+    url: "/accumulators"
+    views:
+      'node-details':
+        templateUrl: "partials/jobs/job.plan.node-list.accumulators.html"
+        controller: 'JobPlanAccumulatorsController'
+
+  .state "single-job.plan.checkpoints",
+    url: "/checkpoints"
+    views:
+      'node-details':
+        templateUrl: "partials/jobs/job.plan.node-list.checkpoints.html"
+        controller: 'JobPlanCheckpointsController'
+
+  .state "single-job.plan.backpressure",
+    url: "/backpressure"
+    views:
+      'node-details':
+        templateUrl: "partials/jobs/job.plan.node-list.backpressure.html"
+        controller: 'JobPlanBackPressureController'
 
   .state "single-job.timeline",
     url: "/timeline"
@@ -105,16 +148,92 @@ angular.module('flinkApp', ['ui.router', 'angularMoment'])
         templateUrl: "partials/jobs/job.timeline.vertex.html"
         controller: 'JobTimelineVertexController'
 
-  .state "single-job.statistics",
-    url: "/statistics"
-    views:
-      details:
-        templateUrl: "partials/jobs/job.statistics.html"
-
   .state "single-job.exceptions",
     url: "/exceptions"
     views:
       details:
         templateUrl: "partials/jobs/job.exceptions.html"
+        controller: 'JobExceptionsController'
+
+  .state "single-job.properties",
+    url: "/properties"
+    views:
+      details:
+        templateUrl: "partials/jobs/job.properties.html"
+        controller: 'JobPropertiesController'
+
+  .state "single-job.config",
+    url: "/config"
+    views:
+      details:
+        templateUrl: "partials/jobs/job.config.html"
+
+  .state "all-manager",
+    url: "/taskmanagers"
+    views:
+      main:
+        templateUrl: "partials/taskmanager/index.html"
+        controller: 'AllTaskManagersController'
+
+  .state "single-manager",
+      url: "/taskmanager/{taskmanagerid}"
+      views:
+        main:
+          templateUrl: "partials/taskmanager/taskmanager.html"
+
+  .state "single-manager.metrics",
+    url: "/metrics"
+    views:
+      details:
+        templateUrl: "partials/taskmanager/taskmanager.metrics.html"
+        controller: 'SingleTaskManagerController'
+
+  .state "single-manager.stdout",
+    url: "/stdout"
+    views:
+      details:
+        templateUrl: "partials/taskmanager/taskmanager.stdout.html"
+        controller: 'SingleTaskManagerStdoutController'
+
+  .state "single-manager.log",
+    url: "/log"
+    views:
+      details:
+        templateUrl: "partials/taskmanager/taskmanager.log.html"
+        controller: 'SingleTaskManagerLogsController'
+
+  .state "jobmanager",
+      url: "/jobmanager"
+      views:
+        main:
+          templateUrl: "partials/jobmanager/index.html"
+
+  .state "jobmanager.config",
+    url: "/config"
+    views:
+      details:
+        templateUrl: "partials/jobmanager/config.html"
+        controller: 'JobManagerConfigController'
+
+  .state "jobmanager.stdout",
+    url: "/stdout"
+    views:
+      details:
+        templateUrl: "partials/jobmanager/stdout.html"
+        controller: 'JobManagerStdoutController'
+
+  .state "jobmanager.log",
+    url: "/log"
+    views:
+      details:
+        templateUrl: "partials/jobmanager/log.html"
+        controller: 'JobManagerLogsController'
+
+  .state "submit",
+      url: "/submit"
+      views:
+        main:
+          templateUrl: "partials/submit.html"
+          controller: "JobSubmitController"
 
   $urlRouterProvider.otherwise "/overview"

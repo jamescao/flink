@@ -53,7 +53,6 @@ public class FlinkZooKeeperQuorumPeer {
 		try {
 			// startup checks and logging
 			EnvironmentInformation.logEnvironmentInfo(LOG, "ZooKeeper Quorum Peer", args);
-			EnvironmentInformation.checkJavaVersion();
 			
 			final ParameterTool params = ParameterTool.fromArgs(args);
 			final String zkConfigFile = params.getRequired("zkConfigFile");
@@ -79,8 +78,9 @@ public class FlinkZooKeeperQuorumPeer {
 
 		Properties zkProps = new Properties();
 
-		InputStream inStream = new FileInputStream(new File(zkConfigFile));
-		zkProps.load(inStream);
+		try (InputStream inStream = new FileInputStream(new File(zkConfigFile))) {
+			zkProps.load(inStream);
+		}
 
 		LOG.info("Configuration: " + zkProps);
 

@@ -21,6 +21,7 @@ package org.apache.flink.test.recovery;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.LocalCollectionOutputFormat;
 import org.apache.flink.client.program.ProgramInvocationException;
@@ -49,11 +50,15 @@ public class SimpleRecoveryITCase {
 	@BeforeClass
 	public static void setupCluster() {
 		Configuration config = new Configuration();
-		config.setInteger(ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, 2);
+		config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 2);
 		config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 2);
-		config.setString(ConfigConstants.DEFAULT_EXECUTION_RETRY_DELAY_KEY, "100 ms");
+		config.setString(ConfigConstants.RESTART_STRATEGY, "fixed-delay");
+		config.setInteger(ConfigConstants.RESTART_STRATEGY_FIXED_DELAY_ATTEMPTS, 1);
+		config.setString(ConfigConstants.RESTART_STRATEGY_FIXED_DELAY_DELAY, "100 ms");
 
 		cluster = new ForkableFlinkMiniCluster(config, false);
+
+		cluster.start();
 	}
 
 	@AfterClass
@@ -77,10 +82,10 @@ public class SimpleRecoveryITCase {
 			// attempt 1
 			{
 				ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(
-						"localhost", cluster.getJobManagerRPCPort());
+						"localhost", cluster.getLeaderRPCPort());
 
 				env.setParallelism(4);
-				env.setNumberOfExecutionRetries(0);
+				env.setRestartStrategy(RestartStrategies.noRestart());
 				env.getConfig().disableSysoutLogging();
 
 				env.generateSequence(1, 10)
@@ -107,10 +112,10 @@ public class SimpleRecoveryITCase {
 			// attempt 2
 			{
 				ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(
-						"localhost", cluster.getJobManagerRPCPort());
+						"localhost", cluster.getLeaderRPCPort());
 
 				env.setParallelism(4);
-				env.setNumberOfExecutionRetries(0);
+				env.setRestartStrategy(RestartStrategies.noRestart());
 				env.getConfig().disableSysoutLogging();
 
 				env.generateSequence(1, 10)
@@ -154,10 +159,10 @@ public class SimpleRecoveryITCase {
 			List<Long> resultCollection = new ArrayList<Long>();
 
 			ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getJobManagerRPCPort());
+					"localhost", cluster.getLeaderRPCPort());
 
 			env.setParallelism(4);
-			env.setNumberOfExecutionRetries(1);
+			// the default restart strategy should be taken
 			env.getConfig().disableSysoutLogging();
 
 			env.generateSequence(1, 10)
@@ -199,10 +204,10 @@ public class SimpleRecoveryITCase {
 			List<Long> resultCollection = new ArrayList<Long>();
 
 			ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getJobManagerRPCPort());
+					"localhost", cluster.getLeaderRPCPort());
 
 			env.setParallelism(4);
-			env.setNumberOfExecutionRetries(5);
+			env.setRestartStrategy(RestartStrategies.fixedDelayRestart(5, 100));
 			env.getConfig().disableSysoutLogging();
 
 			env.generateSequence(1, 10)

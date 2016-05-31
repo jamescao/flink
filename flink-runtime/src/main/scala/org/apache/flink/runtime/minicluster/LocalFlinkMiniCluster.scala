@@ -18,54 +18,45 @@
 
 package org.apache.flink.runtime.minicluster
 
-import akka.actor.{ActorRef, ActorSystem, ExtendedActorSystem}
+import akka.actor.{ActorRef, ActorSystem}
+import org.apache.flink.api.common.JobID
 
 import org.apache.flink.api.common.io.FileOutputFormat
 import org.apache.flink.configuration.{ConfigConstants, Configuration}
-import org.apache.flink.runtime.StreamingMode
-import org.apache.flink.runtime.client.JobClient
+import org.apache.flink.runtime.akka.AkkaUtils
+import org.apache.flink.runtime.clusterframework.FlinkResourceManager
+import org.apache.flink.runtime.clusterframework.standalone.StandaloneResourceManager
+import org.apache.flink.runtime.clusterframework.types.ResourceID
 import org.apache.flink.runtime.io.network.netty.NettyConfig
-import org.apache.flink.runtime.jobmanager.JobManager
-import org.apache.flink.runtime.jobmanager.web.WebInfoServer
+import org.apache.flink.runtime.jobmanager.{MemoryArchivist, JobManager}
+import org.apache.flink.runtime.messages.JobManagerMessages
+import org.apache.flink.runtime.messages.JobManagerMessages.{StoppingFailure, StoppingResponse, RunningJobsStatus, RunningJobs}
 import org.apache.flink.runtime.taskmanager.TaskManager
 import org.apache.flink.runtime.util.EnvironmentInformation
 
-import org.slf4j.LoggerFactory
+import scala.concurrent.Await
 
 /**
  * Local Flink mini cluster which executes all [[TaskManager]]s and the [[JobManager]] in the same
- * JVM. It extends the [[FlinkMiniCluster]] by providing a [[JobClient]], having convenience
- * functions to setup Flink's configuration and implementations to create [[JobManager]] and
- * [[TaskManager]].
+ * JVM. It extends the [[FlinkMiniCluster]] by having convenience functions to setup Flink's
+ * configuration and implementations to create [[JobManager]] and [[TaskManager]].
  *
  * @param userConfiguration Configuration object with the user provided configuration values
  * @param singleActorSystem true if all actors (JobManager and TaskManager) shall be run in the same
  *                          [[ActorSystem]], otherwise false
  */
-class LocalFlinkMiniCluster(userConfiguration: Configuration,
-                            singleActorSystem: Boolean,
-                            streamingMode: StreamingMode)
-  extends FlinkMiniCluster(userConfiguration, singleActorSystem, streamingMode) {
+class LocalFlinkMiniCluster(
+    userConfiguration: Configuration,
+    singleActorSystem: Boolean) extends FlinkMiniCluster(userConfiguration, singleActorSystem) {
 
-  
-  def this(userConfiguration: Configuration, singleActorSystem: Boolean)
-       = this(userConfiguration, singleActorSystem, StreamingMode.BATCH_ONLY)
-  
   def this(userConfiguration: Configuration) = this(userConfiguration, true)
 
   // --------------------------------------------------------------------------
-  
-  
-  val jobClientActorSystem = if (singleActorSystem) {
-    jobManagerActorSystem
-  } else {
-    // create an actor system listening on a random port
-    JobClient.startJobClientActorSystem(configuration)
-  }
-
 
   override def generateConfiguration(userConfiguration: Configuration): Configuration = {
     val config = getDefaultConfig
+
+    setDefaultCiConfig(config)
 
     config.addAll(userConfiguration)
     setMemory(config)
@@ -74,23 +65,52 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
     config
   }
 
-  override def startJobManager(system: ActorSystem): ActorRef = {
+  override def startJobManager(index: Int, system: ActorSystem): ActorRef = {
     val config = configuration.clone()
-       
-    val (jobManager, archiver) = JobManager.startJobManagerActors(config, system, streamingMode)
-    
-    if (config.getBoolean(ConfigConstants.LOCAL_INSTANCE_MANAGER_START_WEBSERVER, false)) {
-      if (userConfiguration.getBoolean(ConfigConstants.JOB_MANAGER_NEW_WEB_FRONTEND_KEY, false)) {
-        // new web frontend
-        JobManager.startWebRuntimeMonitor(userConfiguration, jobManager, archiver)
-      }
-      else {
-        // old web frontend
-        val webServer = new WebInfoServer(configuration, jobManager, archiver)
-        webServer.start()
-      }
+
+    val jobManagerName = getJobManagerName(index)
+    val archiveName = getArchiveName(index)
+
+    val jobManagerPort = config.getInteger(
+      ConfigConstants.JOB_MANAGER_IPC_PORT_KEY,
+      ConfigConstants.DEFAULT_JOB_MANAGER_IPC_PORT)
+
+    if(jobManagerPort > 0) {
+      config.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, jobManagerPort + index)
     }
+
+    val (jobManager, _) = JobManager.startJobManagerActors(
+      config,
+      system,
+      Some(jobManagerName),
+      Some(archiveName),
+      classOf[JobManager],
+      classOf[MemoryArchivist])
+
     jobManager
+  }
+
+  override def startResourceManager(index: Int, system: ActorSystem): ActorRef = {
+    val config = configuration.clone()
+
+    val resourceManagerName = getResourceManagerName(index)
+
+    val resourceManagerPort = config.getInteger(
+      ConfigConstants.RESOURCE_MANAGER_IPC_PORT_KEY,
+      ConfigConstants.DEFAULT_RESOURCE_MANAGER_IPC_PORT)
+
+    if(resourceManagerPort > 0) {
+      config.setInteger(ConfigConstants.RESOURCE_MANAGER_IPC_PORT_KEY, resourceManagerPort + index)
+    }
+
+    val resourceManager = FlinkResourceManager.startResourceManagerActors(
+      config,
+      system,
+      createLeaderRetrievalService(),
+      classOf[StandaloneResourceManager],
+      resourceManagerName)
+
+    resourceManager
   }
 
   override def startTaskManager(index: Int, system: ActorSystem): ActorRef = {
@@ -118,49 +138,32 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
     } else {
       TaskManager.TASK_MANAGER_NAME
     }
-
-    val jobManagerPath: Option[String] = if (singleActorSystem) {
-      Some(jobManagerActor.path.toString)
-    } else {
-      None
-    }
     
-    TaskManager.startTaskManagerComponentsAndActor(config, system,
-                                                   hostname, // network interface to bind to
-                                                   Some(taskManagerActorName), // actor name
-                                                   jobManagerPath, // job manager akka URL
-                                                   localExecution, // start network stack?
-                                                   streamingMode,
-                                                   classOf[TaskManager])
+    TaskManager.startTaskManagerComponentsAndActor(
+      config,
+      ResourceID.generate(), // generate random resource id
+      system,
+      hostname, // network interface to bind to
+      Some(taskManagerActorName), // actor name
+      Some(createLeaderRetrievalService()), // job manager leader retrieval service
+      localExecution, // start network stack?
+      classOf[TaskManager])
   }
 
-  def getJobClientActorSystem: ActorSystem = jobClientActorSystem
+  def getLeaderRPCPort: Int = {
+    val index = getLeaderIndex(timeout)
 
-  def getJobManagerRPCPort: Int = {
-    if (jobManagerActorSystem.isInstanceOf[ExtendedActorSystem]) {
-      val extActor = jobManagerActorSystem.asInstanceOf[ExtendedActorSystem]
-      extActor.provider.getDefaultAddress.port match {
-        case p: Some[Int] => p.get
-        case _ => -1
-      }
-    } else {
-      -1
+    jobManagerActorSystems match {
+      case Some(jmActorSystems) =>
+        AkkaUtils.getAddress(jmActorSystems(index)).port match {
+          case Some(p) => p
+          case None => -1
+        }
+
+      case None => throw new Exception("The JobManager of the LocalFlinkMiniCluster has not been " +
+        "started properly.")
     }
-  }
 
-  override def shutdown(): Unit = {
-    super.shutdown()
-
-    if (!singleActorSystem) {
-      jobClientActorSystem.shutdown()
-    }
-  }
-
-  override def awaitTermination(): Unit = {
-    if (!singleActorSystem) {
-      jobClientActorSystem.awaitTermination()
-    }
-    super.awaitTermination()
   }
 
   def initializeIOFormatClasses(configuration: Configuration): Unit = {
@@ -180,30 +183,20 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
     // set this only if no memory was pre-configured
     if (config.getInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, -1) == -1) {
 
-      val bufferSizeNew: Int = config.getInteger(
-                                      ConfigConstants.TASK_MANAGER_MEMORY_SEGMENT_SIZE_KEY, -1)
-
-      val bufferSizeOld: Int = config.getInteger(
-                                      ConfigConstants.TASK_MANAGER_NETWORK_BUFFER_SIZE_KEY, -1)
-      val bufferSize: Int =
-        if (bufferSizeNew != -1) {
-          bufferSizeNew
-        }
-        else if (bufferSizeOld == -1) {
-          // nothing has been configured, take the default
-          ConfigConstants.DEFAULT_TASK_MANAGER_MEMORY_SEGMENT_SIZE
-        }
-        else {
-          bufferSizeOld
-        }
+      val bufferSize: Int = config.getInteger(
+        ConfigConstants.TASK_MANAGER_MEMORY_SEGMENT_SIZE_KEY,
+        ConfigConstants.DEFAULT_TASK_MANAGER_MEMORY_SEGMENT_SIZE)
       
-      val bufferMem: Long = config.getLong(ConfigConstants.TASK_MANAGER_NETWORK_NUM_BUFFERS_KEY,
-          ConfigConstants.DEFAULT_TASK_MANAGER_NETWORK_NUM_BUFFERS) * bufferSize.toLong
+      val bufferMem: Long = config.getLong(
+        ConfigConstants.TASK_MANAGER_NETWORK_NUM_BUFFERS_KEY,
+        ConfigConstants.DEFAULT_TASK_MANAGER_NETWORK_NUM_BUFFERS) * bufferSize.toLong
 
       val numTaskManager = config.getInteger(
-        ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, 1)
+        ConfigConstants.LOCAL_NUMBER_TASK_MANAGER,
+        ConfigConstants.DEFAULT_LOCAL_NUMBER_TASK_MANAGER)
 
-      val memoryFraction = config.getFloat(ConfigConstants.TASK_MANAGER_MEMORY_FRACTION_KEY,
+      val memoryFraction = config.getFloat(
+        ConfigConstants.TASK_MANAGER_MEMORY_FRACTION_KEY,
         ConfigConstants.DEFAULT_MEMORY_MANAGER_MEMORY_FRACTION)
 
       // full memory size
@@ -221,16 +214,13 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
     }
   }
 
-  def getConfiguration: Configuration = {
-    this.userConfiguration
-  }
-
   def getDefaultConfig: Configuration = {
     val config: Configuration = new Configuration()
 
     config.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, hostname)
 
-    config.setInteger(ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, 1)
+    config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER,
+      ConfigConstants.DEFAULT_LOCAL_NUMBER_TASK_MANAGER)
 
     // Reduce number of threads for local execution
     config.setInteger(NettyConfig.NUM_THREADS_CLIENT, 1)
@@ -238,8 +228,58 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
 
     config
   }
-}
 
-object LocalFlinkMiniCluster {
-//  val LOG = LoggerFactory.getLogger(classOf[LocalFlinkMiniCluster])
+  protected def getJobManagerName(index: Int): String = {
+    if(singleActorSystem) {
+      JobManager.JOB_MANAGER_NAME + "_" + (index + 1)
+    } else {
+      JobManager.JOB_MANAGER_NAME
+    }
+  }
+
+  protected def getResourceManagerName(index: Int): String = {
+    if(singleActorSystem) {
+      FlinkResourceManager.RESOURCE_MANAGER_NAME + "_" + (index + 1)
+    } else {
+      FlinkResourceManager.RESOURCE_MANAGER_NAME
+    }
+  }
+
+  protected def getArchiveName(index: Int): String = {
+    if(singleActorSystem) {
+      JobManager.ARCHIVE_NAME + "_" + (index + 1)
+    } else {
+      JobManager.ARCHIVE_NAME
+    }
+  }
+  
+  // --------------------------------------------------------------------------
+  //  Actions on running jobs
+  // --------------------------------------------------------------------------
+  
+  def currentlyRunningJobs: Iterable[JobID] = {
+    val leader = getLeaderGateway(timeout)
+    val future = leader.ask(JobManagerMessages.RequestRunningJobsStatus, timeout)
+                       .mapTo[RunningJobsStatus]
+    Await.result(future, timeout).runningJobs.map(_.getJobId)
+  }
+
+  def getCurrentlyRunningJobsJava(): java.util.List[JobID] = {
+    val list = new java.util.ArrayList[JobID]()
+    currentlyRunningJobs.foreach(list.add)
+    list
+  }
+  
+  def stopJob(id: JobID) : Unit = {
+    val leader = getLeaderGateway(timeout)
+    val response = leader.ask(new JobManagerMessages.StopJob(id), timeout)
+                         .mapTo[StoppingResponse]
+    val rc = Await.result(response, timeout)
+
+    rc match {
+      case failure: StoppingFailure =>
+        throw new Exception(s"Stopping the job with ID $id failed.", failure.cause)
+      case _ =>
+    }
+  }
 }

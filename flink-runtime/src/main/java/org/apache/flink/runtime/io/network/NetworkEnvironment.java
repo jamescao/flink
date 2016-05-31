@@ -36,6 +36,7 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionManager;
 import org.apache.flink.runtime.io.network.partition.consumer.SingleInputGate;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.messages.JobManagerMessages.RequestPartitionState;
+import org.apache.flink.runtime.messages.TaskMessages.FailTask;
 import org.apache.flink.runtime.taskmanager.NetworkEnvironmentConfiguration;
 import org.apache.flink.runtime.taskmanager.Task;
 import org.apache.flink.runtime.taskmanager.TaskManager;
@@ -51,7 +52,6 @@ import java.io.IOException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.flink.runtime.messages.JobManagerMessages.ScheduleOrUpdateConsumers;
-import static org.apache.flink.runtime.messages.TaskMessages.FailTask;
 
 /**
  * Network I/O components of each {@link TaskManager} instance. The network environment contains
@@ -107,7 +107,8 @@ public class NetworkEnvironment {
 		// create the network buffers - this is the operation most likely to fail upon
 		// mis-configuration, so we do this first
 		try {
-			networkBufferPool = new NetworkBufferPool(config.numNetworkBuffers(), config.networkBufferSize());
+			networkBufferPool = new NetworkBufferPool(config.numNetworkBuffers(),
+					config.networkBufferSize(), config.memoryType());
 		}
 		catch (Throwable t) {
 			throw new IOException("Cannot allocate network buffer pool: " + t.getMessage(), t);
@@ -276,6 +277,8 @@ public class NetworkEnvironment {
 			throw new IllegalStateException("Unequal number of writers and partitions.");
 		}
 
+		ResultPartitionConsumableNotifier jobManagerNotifier;
+
 		synchronized (lock) {
 			if (isShutdown) {
 				throw new IllegalStateException("NetworkEnvironment is shut down");
@@ -337,12 +340,23 @@ public class NetworkEnvironment {
 					}
 				}
 			}
+
+			// Copy the reference to prevent races with concurrent shut downs
+			jobManagerNotifier = partitionConsumableNotifier;
+		}
+
+		for (ResultPartition partition : producedPartitions) {
+			// Eagerly notify consumers if required.
+			if (partition.getEagerlyDeployConsumers()) {
+				jobManagerNotifier.notifyPartitionConsumable(
+						partition.getJobId(), partition.getPartitionId());
+			}
 		}
 	}
 
 	public void unregisterTask(Task task) {
 		LOG.debug("Unregister task {} from network environment (state: {}).",
-				task.getTaskNameWithSubtasks(), task.getExecutionState());
+				task.getTaskInfo().getTaskNameWithSubtasks(), task.getExecutionState());
 
 		final ExecutionAttemptID executionId = task.getExecutionId();
 

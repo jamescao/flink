@@ -18,6 +18,7 @@
 
 package org.apache.flink.types.parser;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.types.StringValue;
 
 /**
@@ -27,10 +28,12 @@ import org.apache.flink.types.StringValue;
  * 
  * @see StringValue
  */
+@PublicEvolving
 public class StringValueParser extends FieldParser<StringValue> {
 
 	private boolean quotedStringParsing = false;
 	private byte quoteCharacter;
+	private static final byte BACKSLASH = 92;
 
 	private StringValue result;
 
@@ -51,8 +54,8 @@ public class StringValueParser extends FieldParser<StringValue> {
 			// quoted string parsing enabled and first character is a quote
 			i++;
 
-			// search for ending quote character
-			while(i < limit && bytes[i] != quoteCharacter) {
+			// search for ending quote character, continue when it is escaped
+			while (i < limit && (bytes[i] != quoteCharacter || bytes[i-1] == BACKSLASH)){
 				i++;
 			}
 
